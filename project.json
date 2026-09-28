@@ -90,9 +90,10 @@
     },
     {
       "id": 5,
-      "name": "Google Cloud Staging + End-to-End Freeze",
-      "status": "blocked_needs_human",
-      "note": "Requires the project owner to provide/confirm a GCP project, billing, and access before any real cloud resource is created — per kickoff-contract.md HUMAN REVIEW condition #2 (production credentials / secure access). Not proceeding on GCP provisioning without this.",
+      "name": "Public Prototype Deployment",
+      "formerName": "Google Cloud Staging + End-to-End Freeze",
+      "status": "in_progress",
+      "note": "Rescoped by the project owner after the original Gate 5's GCP-access HUMAN REVIEW block: no GCP for v1.0. GitHub Pages + browser-side (localStorage/IndexedDB) persistence, single test user, no login, no backend server, no multi-tenant isolation. See docs/gates/kickoff-contract.md 'Gate 5 (ACTIVE)' section for the full contract.",
       "dependsOn": [4],
       "terminalMarker": "v1.0 MIGRATION BASELINE FROZEN"
     }

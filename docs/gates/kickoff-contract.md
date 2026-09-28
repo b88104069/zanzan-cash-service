@@ -234,16 +234,28 @@ Gate 4 PASS → auto-advance to Gate 5.
 
 ---
 
-### Gate 5 — Google Cloud Staging + End-to-End Freeze
+### Gate 5 — RESCOPED: Public Prototype Deployment (was: Google Cloud Staging)
 
-**Purpose**: Deploy the full Standalone Service to a real Google Cloud
-staging/non-production environment; complete full technical acceptance.
+**Status note**: the project owner rescoped Gate 5 in full after Gate 4
+PASS, specifically because Gate 4's GCP-access HUMAN REVIEW block
+(`blocked_needs_human` in `project.json`) surfaced a real question — does
+this project actually need a GCP-backed staging environment to prove the
+frontend works, or would a much smaller, credential-free deployment
+demonstrate the same thing faster? The owner's answer, issued as a full
+replacement Gate 5 Kickoff: **no GCP for v1.0**. The original Google Cloud
+Staging definition below is kept for the historical record (and in case a
+future project resumes it), but it is **superseded** — the active Gate 5
+contract is the rescoped version immediately after it.
 
-**Build**: Per Gate 1's ratified architecture — application runtime,
-managed database, secret/environment configuration, logging, HTTPS,
-deployment configuration.
+**Purpose (original, superseded)**: Deploy the full Standalone Service to
+a real Google Cloud staging/non-production environment; complete full
+technical acceptance.
 
-**Must demonstrate end-to-end**:
+**Build (original, superseded)**: Per Gate 1's ratified architecture —
+application runtime, managed database, secret/environment configuration,
+logging, HTTPS, deployment configuration.
+
+**Must demonstrate end-to-end (original, superseded)**:
 ```
 Browser → Standalone Frontend → Standalone API → Auth/Tenant/Entitlement → Database
 ```
@@ -251,7 +263,7 @@ covering: create tenant; create account; create category; record
 income/expense; edit; delete; transfer; summary; search; CSV; tenant
 isolation; restart/persistence.
 
-**Explicitly NOT done in Gate 5**:
+**Explicitly NOT done in Gate 5 (original, still true under the rescope)**:
 - No cutting of production WordPress traffic
 - No deleting the original plugin
 - No migrating real membership data
@@ -261,7 +273,7 @@ isolation; restart/persistence.
 
 These are reserved for a later, separate **Production Cutover Project**.
 
-**PASS Criteria**:
+**PASS Criteria (original, superseded)**:
 - Google Cloud staging deployment succeeds.
 - Full E2E flow PASS.
 - Automated regression PASS.
@@ -272,6 +284,122 @@ These are reserved for a later, separate **Production Cutover Project**.
 - Repository documentation matches actual implementation.
 - Final Gate Review PASS.
 - Project marked: **v1.0 MIGRATION BASELINE FROZEN**.
+
+---
+
+### Gate 5 (ACTIVE) — Public Prototype Deployment
+
+Issued by the project owner as a full Gate 5 Kickoff replacement, in
+conversation, immediately after Gate 4's PASS. Reproduced here as the
+authoritative Gate 5 contract.
+
+**Purpose**: Prove the standalone frontend's bookkeeping functionality
+actually works end-to-end for a single test user, via a publicly reachable
+URL, with the smallest possible deployment footprint — no GCP, no Cloud
+SQL, no backend server, no WordPress, no WooCommerce, no login, no
+multi-tenant isolation.
+
+**Baseline**: Gates 1–4 PASS. Execution branch `migration/v1`.
+
+**Explicitly out of scope for this Gate** (deferred to a future real
+integration with the production WordPress site, if that ever happens):
+GCP, Cloud Run, Cloud SQL, MySQL, the Gate 3 standalone API/backend
+server, WordPress, WooCommerce, Entitlement, JWT login, multiple users,
+multi-account identity isolation, real members, production customer data,
+DNS, zanzan.tw routing, production cutover.
+
+**Data strategy**: single test user, browser-side persistence
+(`localStorage`, or `IndexedDB` if the existing data shape fits it more
+naturally) — whichever needs the least change. This is deliberately **not**
+a preview of a future multi-user persistence architecture; building one
+here would be scope creep the owner explicitly flagged ("不要因為未來可能有多使用者，
+就在本 Gate 建立不需要的 backend/database").
+
+**Migration/refactor principle**: Gate 1–4's domain rules (income/expense
+mutual exclusion, account validation, category validation, transfer pair
+integrity, summary calculation, CSV behavior) must not be rewritten
+inconsistently. A prototype-only browser persistence adapter may replace
+the Gate 3 `frontend → HTTP API → MySQL` path, but the business logic
+behind it must stay behaviorally identical to the Gate 2–4 characterization/
+parity baseline — not a quick reimplementation with different behavior.
+
+**Scope** (what the prototype must do):
+1. A public URL, openable directly in a browser
+2. Single-page cashbook UI
+3. Single test user (no login)
+4. Local data persistence (survives reload and browser restart)
+5. Income/expense CRUD
+6. Account management
+7. Category management
+8. Transfer
+9. Dashboard summary
+10. Detail search/sort
+11. CSV export
+12. CSV import/restore, if reasonable to add
+13. A clearly labeled "Prototype Data / Debug" section at the bottom of the
+    page showing the actual contents of browser storage (accounts,
+    categories, entries, transfers, summary) — for confirming that what
+    the UI shows was actually persisted, not for production use. This
+    section only **displays** what's in `localStorage`/`IndexedDB`; the
+    real persistence is the storage itself, not the debug section (a
+    plain page reload does not re-render HTML from scratch losing data —
+    storage does the actual persisting; the debug section just reads it
+    back).
+
+**Deployment**: prefer GitHub Pages, deployable directly from this
+repository with no external credential. Handle the Vite base path
+correctly, keep secrets out of the repo, document the relationship between
+`main`/`migration/v1` and the deploy source, and record the live prototype
+URL. Only propose a minimal alternative — never jump back to GCP — if
+GitHub Pages turns out to have a real technical blocker.
+
+**PASS Criteria**:
+1. A public URL exists and opens directly in a browser.
+2. No login required.
+3. No WordPress required.
+4. No backend server required.
+5. No MySQL required.
+6. No GCP credential required.
+7. Can add income.
+8. Can add expense.
+9. Can edit and delete a normal entry.
+10. Can create/manage accounts.
+11. Can create/manage categories.
+12. Can perform an account transfer.
+13. Transfer double-entry integrity is not broken.
+14. Dashboard summary is correct.
+15. Search and sort work.
+16. CSV export works.
+17. Data survives a page reload.
+18. Data survives closing and reopening the browser.
+19. The Prototype Data/Debug section shows the actual stored content.
+20. No regression in Gate 2–4's core behavior.
+
+**Required test evidence**: not code inspection — a real browser session
+against the actual deployed public URL, walking through: open URL → create
+account → create category → add income → add expense → edit → transfer →
+verify both transfer legs → search → sort → dashboard → CSV export →
+reload → confirm data survived → close/reopen browser → confirm data
+survived. If CSV import is implemented, also verify export → clear →
+import → parity.
+
+**Repository/documentation on completion**: update `project.json`; create/
+update prototype deployment documentation recording the storage strategy
+and the live public URL; document known limitations; create
+`reports/gate-5-delta-report.md`; commit + push to `migration/v1`.
+
+**Gate Review**: same confirmed pipeline (Claude Code → GitHub → Slack
+`#ai-gate-test` → Codex monitor → ChatGPT → Slack reply). On MUST FIX, fix
+and resubmit without asking. On PASS, this Prototype Project is complete.
+
+**HUMAN REVIEW / BLOCKED conditions specific to this rescoped Gate 5**
+(replacing the original Gate 5's GCP-access block, which no longer
+applies): stop only if (a) GitHub Pages genuinely cannot provide what this
+Gate needs and no credential-free alternative is workable; (b) a cloud
+resource that costs money would be required; (c) a new external account/
+credential would be required; (d) real production data would be touched;
+(e) zanzan.tw/Cloudflare/WordPress production would need to change.
+Otherwise, do not stop to ask mid-Gate.
 
 ---
 
@@ -525,3 +653,17 @@ Reviewer asking for more work.
   endorse the concepts Gate 1 defined (service boundaries, tenant-context
   design, etc.), but `project.json` records this precisely rather than
   backdating a Gate 1 review that didn't happen. Gate 3 starts next.
+- 2026-09-28 — Gate 4 PASS, then Gate 5 fully rescoped by the project
+  owner: after Gate 4's PASS, Gate 5 hit its planned HUMAN REVIEW block
+  (needs a real GCP project/billing/access, which the execution agent
+  cannot obtain itself). Rather than supply GCP access, the owner issued a
+  complete replacement Gate 5 Kickoff in conversation: **no GCP for
+  v1.0** — Gate 5 becomes a credential-free "Public Prototype Deployment"
+  (GitHub Pages + browser-side persistence, single test user, no login, no
+  backend server, no multi-tenant isolation), reusing Gate 2–4's domain
+  logic unchanged behind a new browser-persistence adapter instead of the
+  Gate 3 HTTP API. The original Google Cloud Staging Gate 5 definition is
+  kept in this file for the historical record and marked superseded; the
+  new "Gate 5 (ACTIVE)" section immediately below it is the contract now
+  in force. `project.json`'s Gate 5 entry and stop condition were updated
+  to match — the GCP-access block no longer applies.
