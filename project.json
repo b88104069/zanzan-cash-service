@@ -1,0 +1,74 @@
+{
+  "project": "zanzan-cash-service-migration",
+  "version": "1.0",
+  "contract": "docs/gates/kickoff-contract.md",
+  "legacySnapshot": {
+    "plugin": "zanzan-simple-cash-saas",
+    "version": "1.8.33",
+    "source": "docs/migration/zanzan-simple-cash-saas_1-8-33_合併原始碼.txt"
+  },
+  "repository": {
+    "full_name": "b88104069/zanzan-cash-service",
+    "stableBranch": "main",
+    "executionBranch": "migration/v1"
+  },
+  "gates": [
+    {
+      "id": 1,
+      "name": "Project Contract + Architecture Freeze",
+      "status": "in_progress",
+      "outputs": [
+        "CLAUDE.md",
+        "project.json",
+        "docs/architecture/",
+        "docs/gates/",
+        "reports/gate-1-delta-report.md"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Characterization Tests + Standalone Core",
+      "status": "pending",
+      "dependsOn": [1]
+    },
+    {
+      "id": 3,
+      "name": "Standalone API + Identity / Entitlement Boundary",
+      "status": "pending",
+      "dependsOn": [2]
+    },
+    {
+      "id": 4,
+      "name": "Standalone Frontend + Migration Parity",
+      "status": "pending",
+      "dependsOn": [3]
+    },
+    {
+      "id": 5,
+      "name": "Google Cloud Staging + End-to-End Freeze",
+      "status": "pending",
+      "dependsOn": [4],
+      "terminalMarker": "v1.0 MIGRATION BASELINE FROZEN"
+    }
+  ],
+  "outOfScope": [
+    "new-advanced-financial-features",
+    "ai-bookkeeping",
+    "ocr-invoice-recognition",
+    "new-reporting-product-lines",
+    "mobile-app",
+    "production-cutover",
+    "production-woocommerce-migration",
+    "real-membership-data-migration",
+    "real-customer-bookkeeping-data-migration",
+    "removing-original-wordpress-plugin"
+  ],
+  "domains": [
+    "Tenant",
+    "Account",
+    "Category",
+    "CashEntry",
+    "Transfer",
+    "Entitlement"
+  ]
+}
