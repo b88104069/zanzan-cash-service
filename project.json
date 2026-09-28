@@ -48,7 +48,14 @@
     {
       "id": 3,
       "name": "Standalone API + Identity / Entitlement Boundary",
-      "status": "awaiting_review",
+      "status": "passed",
+      "review": {
+        "channel": "slack",
+        "chatgptStatus": "PASS",
+        "mustFix": "NONE",
+        "threadUrl": "https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790574063022069",
+        "verifiedBy": "slack_read_thread sender-identity check (ChatGPT Slack app)"
+      },
       "dependsOn": [2],
       "outputs": [
         "backend/prisma/",
@@ -65,8 +72,9 @@
     {
       "id": 4,
       "name": "Standalone Frontend + Migration Parity",
-      "status": "pending",
-      "dependsOn": [3]
+      "status": "in_progress",
+      "dependsOn": [3],
+      "note": "Gate 3 review requires this Gate to make and document the cash_entries.category preserve-vs-normalize decision."
     },
     {
       "id": 5,
