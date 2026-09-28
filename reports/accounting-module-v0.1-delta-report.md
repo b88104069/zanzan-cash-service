@@ -191,3 +191,85 @@ GATE REVIEW RESULT (appended after review)
   PASS. This Delta Report's review is therefore recorded as complete, but
   the merge itself is deferred pending the project owner's decision (see
   the chat reply accompanying this report).
+- The project owner reviewed independently (outside the ChatGPT relay)
+  and confirmed: keep the branch unmerged, and first complete a
+  **prototype deployment validation** — a real GitHub Pages preview
+  deployment with real-browser E2E for both `#/cash` and `#/accounting` —
+  before any merge decision. Instruction: *"Keep feature/accounting-module
+  branch. Do not merge. Prepare Accounting Module v0.1 prototype
+  deployment validation against GitHub Pages preview URL, including real
+  browser E2E for both #/cash and #/accounting. Submit Delta Report after
+  completion."* See the closure section below.
+
+---
+
+[Accounting Module v0.1 — Prototype Deployment Validation] (closure delta)
+
+WHAT WAS BUILT
+- `frontend/vite.config.ts` — added a `PAGES_BASE_PATH` env override
+  (defaults to the existing production `/zanzan-cash-service/` path when
+  unset, so the production build is byte-for-byte unaffected).
+- `.github/workflows/deploy-pages-preview.yml` (new) — triggers on push to
+  `feature/accounting-module`. GitHub Pages under the native Actions
+  source model serves exactly one live deployment per repo, so rather than
+  standing up a second Pages site or an external host (Netlify/Vercel —
+  which would need a new credential, explicitly out of scope), this
+  workflow builds BOTH refs in one job and combines them into one
+  artifact:
+  - `main` (production, unchanged) → deployed at the existing root
+  - `feature/accounting-module` (this branch, `PAGES_BASE_PATH=/zanzan-cash-service/preview/accounting-module/`)
+    → deployed under `/preview/accounting-module/`
+  Both are then published together via `actions/upload-pages-artifact` +
+  `actions/deploy-pages`, so the already-approved production prototype at
+  the root is untouched while the feature branch gets a real, public,
+  directly-linkable preview URL.
+- `frontend/playwright.preview.config.ts` (new) — points `baseURL` at the
+  preview subpath; reuses `e2e/parity.spec.ts` and `e2e/accounting.spec.ts`
+  completely unmodified (no separate "preview-only" test logic).
+
+PREVIEW URL
+**https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/**
+(production root, https://b88104069.github.io/zanzan-cash-service/, confirmed unchanged and still HTTP 200)
+
+TEST / EVIDENCE
+```
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/
+200
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/
+200
+$ npx playwright test --config=playwright.preview.config.ts
+...
+1 passed (1.5m)   [e2e/parity.spec.ts final status: passed, 1 flaky retry]
+1 passed           [e2e/accounting.spec.ts final status: passed, 1 flaky retry]
+```
+Both `e2e/parity.spec.ts` (18 steps: no-login open, account/category CRUD,
+income/expense CRUD, transfer double-entry integrity, search/sort,
+dashboard summary, CSV export/import, Debug panel, reload persistence,
+close/reopen-browser persistence) and `e2e/accounting.spec.ts` (`#/cash`
+and `#/accounting` independently open/reload/bookmark; demo mapping seed
+visible; mapped income → correct journal entry + traceable voucher;
+unmapped category flagged, no journal created; transfer excluded but
+visibly counted; accounting data survives reload; Cash Module dashboard
+unaffected) pass against the real preview URL, run through the
+environment's real Chromium.
+
+Some individual attempts hit this sandbox's own egress-proxy flakiness
+(`ERR_TOO_MANY_RETRIES`), the same pre-existing, already-documented
+sandbox limitation from the Gate 5 closure delta — not a defect in the
+deployed app. `playwright.preview.config.ts` uses the same
+`retries`/timeout/proxy-args mitigation as `playwright.prod.config.ts`,
+and every run's final Playwright status was `passed`, confirmed via
+`test-results/.last-run.json`.
+
+DEVIATIONS
+None. This closure delta only adds deployment/test tooling
+(`vite.config.ts`'s env-gated base override, the preview workflow, the
+preview Playwright config) — no domain logic, UI component, or Cash
+Module file changed.
+
+REQUEST
+This completes the project owner's requested prototype deployment
+validation. `feature/accounting-module` remains unmerged, pending the
+project owner's explicit merge decision — not automatically opened as a
+PR despite ChatGPT's earlier suggestion, per this Gate's own no-auto-merge
+instruction.
