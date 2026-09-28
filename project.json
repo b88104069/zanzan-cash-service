@@ -72,9 +72,14 @@
     {
       "id": 4,
       "name": "Standalone Frontend + Migration Parity",
-      "status": "in_progress",
+      "status": "awaiting_review",
       "dependsOn": [3],
-      "note": "Gate 3 review requires this Gate to make and document the cash_entries.category preserve-vs-normalize decision."
+      "outputs": [
+        "frontend/",
+        "backend/scripts/migration/",
+        "docs/architecture/category-decision.md",
+        "reports/gate-4-delta-report.md"
+      ]
     },
     {
       "id": 5,

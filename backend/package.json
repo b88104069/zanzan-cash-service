@@ -13,7 +13,8 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "dev": "tsx watch src/http/server.ts",
-    "start": "node dist/http/server.js"
+    "start": "node dist/http/server.js",
+    "migrate:dryrun": "tsx scripts/migration/migrate.ts"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
