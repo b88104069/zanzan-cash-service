@@ -16,7 +16,7 @@
     {
       "id": 1,
       "name": "Project Contract + Architecture Freeze",
-      "status": "in_progress",
+      "status": "awaiting_review",
       "outputs": [
         "CLAUDE.md",
         "project.json",
@@ -28,8 +28,14 @@
     {
       "id": 2,
       "name": "Characterization Tests + Standalone Core",
-      "status": "pending",
-      "dependsOn": [1]
+      "status": "awaiting_review",
+      "dependsOn": [1],
+      "outputs": [
+        "backend/src/domain/",
+        "backend/src/infra/memory/",
+        "backend/test/",
+        "reports/gate-2-delta-report.md"
+      ]
     },
     {
       "id": 3,

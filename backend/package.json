@@ -1,0 +1,17 @@
+{
+  "name": "@zanzan-cash-service/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone core domain for the Zanzan Cash Service migration (Gate 2). No WordPress/WooCommerce dependency by design.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4",
+    "@types/node": "^22.9.0"
+  }
+}
