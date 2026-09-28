@@ -1,0 +1,87 @@
+name: Deploy Accounting Module v0.1 preview to GitHub Pages
+
+# Accounting Module Prototype v0.1 — prototype deployment validation,
+# requested by the project owner before merging feature/accounting-module
+# into main (see Slack #ai-gate-test). This repo's GitHub Pages site can
+# only serve one live deployment at a time, so this workflow rebuilds BOTH
+# the untouched production root (from `main`) and this feature branch,
+# combining them into one artifact:
+#   /                                    -> production root, unchanged (main)
+#   /preview/accounting-module/          -> this feature branch's build
+# This avoids a second GitHub Pages site, a new external hosting
+# credential (Netlify/Vercel/etc — explicitly out of scope), or touching
+# the already-reviewed production deployment.
+on:
+  push:
+    branches:
+      - feature/accounting-module
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-pages-preview.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch (this ref)
+        uses: actions/checkout@v4
+        with:
+          path: feature-src
+
+      - name: Checkout production main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: feature-src/frontend/package-lock.json
+
+      - name: Build production root (main, unchanged)
+        working-directory: main-src/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build Accounting Module v0.1 preview (feature branch)
+        working-directory: feature-src/frontend
+        env:
+          PAGES_BASE_PATH: /zanzan-cash-service/preview/accounting-module/
+        run: |
+          npm ci
+          npm run build
+
+      - name: Combine into one Pages artifact
+        run: |
+          mkdir -p combined
+          cp -r main-src/frontend/dist/. combined/
+          mkdir -p combined/preview/accounting-module
+          cp -r feature-src/frontend/dist/. combined/preview/accounting-module/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: combined
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
