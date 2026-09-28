@@ -94,6 +94,14 @@
       "formerName": "Google Cloud Staging + End-to-End Freeze",
       "status": "in_progress",
       "note": "Rescoped by the project owner after the original Gate 5's GCP-access HUMAN REVIEW block: no GCP for v1.0. GitHub Pages + browser-side (localStorage/IndexedDB) persistence, single test user, no login, no backend server, no multi-tenant isolation. See docs/gates/kickoff-contract.md 'Gate 5 (ACTIVE)' section for the full contract.",
+      "deploymentUrl": "https://b88104069.github.io/zanzan-cash-service/",
+      "review": {
+        "channel": "slack",
+        "chatgptStatus": "CONDITIONAL PASS",
+        "mustFix": "GitHub Pages deployment + real-deployed-URL E2E evidence (both since resolved; closure delta resubmitted for final PASS)",
+        "threadUrl": "https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790588456279109",
+        "verifiedBy": "slack_read_thread sender-identity check (ChatGPT Slack app)"
+      },
       "dependsOn": [4],
       "terminalMarker": "v1.0 MIGRATION BASELINE FROZEN"
     }

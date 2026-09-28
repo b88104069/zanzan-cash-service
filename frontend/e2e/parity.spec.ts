@@ -16,7 +16,7 @@ test('Gate 5 prototype parity checklist end-to-end', async ({ page, context }) =
   page.on('dialog', (dialog) => dialog.accept());
 
   await test.step('open the public URL — no login required', async () => {
-    await page.goto('/');
+    await page.goto('./');
     await expect(page.locator('h2')).toContainText('贊贊記帳');
     // the default ledger is auto-provisioned with a 現金 account — no login/company-creation screen exists
     await expect(page.locator('#entry-account option', { hasText: '現金' })).toHaveCount(1);
@@ -137,7 +137,7 @@ test('Gate 5 prototype parity checklist end-to-end', async ({ page, context }) =
     const storageState = await context.storageState();
     const newContext = await page.context().browser()!.newContext({ storageState });
     const newPage = await newContext.newPage();
-    await newPage.goto('/');
+    await newPage.goto('./');
     await expect(newPage.locator('#sec-list').getByText('Prototype 收入測試（已編輯）')).toBeVisible();
     await expect(newPage.locator('#sec-accounts table')).toContainText('銀行');
     await newContext.close();

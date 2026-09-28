@@ -59,8 +59,14 @@ multi-tenant isolation. The app runs entirely in the visitor's browser.
   can toggle that setting — it is a one-time console action, not a
   HUMAN REVIEW stop condition (no cost, no new credential, no production
   system touched).
-- **Live URL**: to be recorded here once the repo owner has enabled Pages
-  and the first deploy workflow run has completed successfully.
+- **Live URL**: **https://b88104069.github.io/zanzan-cash-service/** —
+  confirmed live after the repo owner enabled Settings → Pages → Source:
+  GitHub Actions and the `deploy-pages.yml` workflow's `build`/`deploy`
+  jobs both completed successfully. Verified with a real browser
+  end-to-end run (`frontend/playwright.prod.config.ts`,
+  `npx playwright test --config=playwright.prod.config.ts`) covering the
+  full Gate 5 PASS checklist against this exact URL, including reload-
+  persistence and close/reopen-browser persistence.
 
 ## Known limitations
 

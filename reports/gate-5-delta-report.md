@@ -239,3 +239,87 @@ signed "Claude Code" on its own line), with the explicit caveat above:
 deployment-URL and real-deployed-URL E2E evidence are pending the repo
 owner's one-time GitHub Pages toggle, everything else in the rescoped
 scope is implemented and verified against the local build.
+
+---
+
+[Gate 5 Closure Delta] — resolves the CONDITIONAL PASS's two open items
+
+REVIEW RECEIVED
+- Slack `#ai-gate-test`, same thread, message ts `1790588546.392399`.
+- Verified sender via `slack_read_thread`: the ChatGPT Slack app
+  (`<@U0C5PSTQMEC>`), ~1 minute turnaround.
+- **STATUS: CONDITIONAL PASS ⚠️ — NOT YET FINAL.** Implementation, scope
+  control, and every other item accepted; explicitly withheld Final
+  PASS/FROZEN on exactly two things: (1) a public deployed URL, and (2) a
+  real-browser E2E run against that URL, not the local dev server.
+
+WHAT WAS RESOLVED
+1. **Public URL — now live**: the repo owner enabled Settings → Pages →
+   Source: GitHub Actions (the one manual step outside this session's
+   reach). `deploy-pages.yml`'s `build` and `deploy` jobs both completed
+   successfully. Live URL:
+   **https://b88104069.github.io/zanzan-cash-service/**
+2. **Real-deployed-URL E2E — now run and passing**: this session's network
+   policy initially denied outbound access to `b88104069.github.io`
+   entirely (`ERR_CERT_AUTHORITY_INVALID`/proxy `403`); the repo owner
+   widened the environment's network access, after which the URL became
+   reachable (confirmed `curl` → `200`, correct built HTML with
+   `/zanzan-cash-service/` asset paths).
+   - Added `frontend/playwright.prod.config.ts`, a second Playwright
+     config that points `baseURL` at the real GitHub Pages URL instead of
+     the local dev server and drops the `webServer` block (nothing local
+     to start). Reuses the exact same `e2e/parity.spec.ts` — no test logic
+     duplicated or rewritten for "prod."
+   - Fixed a real bug this surfaced: `page.goto('/')` and
+     `newPage.goto('/')` resolve an absolute path against the *origin*,
+     which silently drops the `/zanzan-cash-service/` GitHub Pages
+     project-site path (this never showed up against `localhost:5173`,
+     which has no path segment). Changed both to `goto('./')`, which
+     correctly resolves relative to `baseURL` including its path, in
+     either config.
+   - Ran `npx playwright test --config=playwright.prod.config.ts` against
+     the real live URL, through a real browser (the environment's
+     pre-installed Chromium): **all 18 test.steps passed**, covering the
+     full Gate 5 checklist — open with no login, account/category
+     creation, income/expense add/edit, transfer with verified double-entry
+     integrity, uneditable transfer leg, search, sort, dashboard summary,
+     CSV export, Debug panel content, **reload-persistence**, **close/
+     reopen-browser persistence**, and the CSV import round-trip — against
+     the actual public URL, not code inspection and not the local server.
+   - This session's own egress proxy (unrelated to the real site) caused
+     intermittent `ERR_TOO_MANY_RETRIES`/HTTP2 flakiness on some runs
+     against the real URL; added `retries: 2`, generous timeouts, and
+     `--disable-http2`/`--disable-background-networking` launch args to
+     `playwright.prod.config.ts` to get a stable, reproducible run — this
+     is proxy/sandbox instability in this session's tooling, not an issue
+     with the deployed app itself (multiple clean single-attempt passes
+     were also observed).
+
+FILES CHANGED (this closure delta, on top of the prior Gate 5 commit)
+- `frontend/e2e/parity.spec.ts` — `goto('/')` → `goto('./')` (2 call sites)
+  so the suite works against a base URL with a non-root path
+- `frontend/playwright.prod.config.ts` (new) — real-URL E2E config
+- `docs/architecture/prototype-deployment.md` — live URL recorded
+- `project.json` — Gate 5 `deploymentUrl` recorded; review status updated
+  to reflect the CONDITIONAL PASS and this closure delta
+
+TEST / EVIDENCE (closure)
+```
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/
+200
+
+$ npx playwright test --config=playwright.prod.config.ts
+Running 1 test using 1 worker
+  ✓  1 e2e/parity.spec.ts:15:1 › Gate 5 prototype parity checklist end-to-end (21.8s)
+  1 passed (22.9s)
+```
+Confirmed via `test-results/.last-run.json`: `{"status":"passed","failedTests":[]}`.
+
+REQUEST
+Final Gate Review. Both items the CONDITIONAL PASS required are now
+resolved and evidenced above: the prototype is live at
+https://b88104069.github.io/zanzan-cash-service/ and has a passing
+real-browser E2E run against that exact URL covering every PASS
+criterion. No other scope, architecture, or domain-logic changes were
+made in this closure delta. On PASS, this completes Gate 5 and the whole
+v1.0 migration project — no further Gates remain.
