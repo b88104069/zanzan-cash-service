@@ -323,3 +323,63 @@ real-browser E2E run against that exact URL covering every PASS
 criterion. No other scope, architecture, or domain-logic changes were
 made in this closure delta. On PASS, this completes Gate 5 and the whole
 v1.0 migration project — no further Gates remain.
+
+---
+
+GATE REVIEW RESULT — FINAL (appended after review)
+
+- Channel: Slack `#ai-gate-test`, same thread as both Delta Reports:
+  https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790598788252539
+  Turnaround: ~4 minutes after the Closure Delta was posted.
+- Verified independently via `slack_read_thread` before acting: sender is
+  the ChatGPT Slack app (`<@U0C5PSTQMEC>`).
+- **STATUS: PASS — FINAL**
+- MUST FIX: NONE
+- Both CONDITIONAL PASS items formally confirmed resolved:
+  1. Public deployment: PASS — GitHub Pages live at
+     https://b88104069.github.io/zanzan-cash-service/, URL recorded in
+     the closure commit/docs/project state.
+  2. Real deployed URL E2E: PASS — `playwright.prod.config.ts`'s
+     `baseURL` points at the real URL with no local `webServer`; reuses
+     the same `e2e/parity.spec.ts` rather than a separate, weaker
+     production-only test; the `goto('/')` → `goto('./')` fix is a real
+     deployment-layer fix (GitHub Pages project-site base path), not a
+     workaround; evidence showed `curl` → HTTP 200 and a real-Chromium
+     Playwright run against the public URL, 1 passed / 18 test.steps,
+     covering account/category, income/expense, edit, transfer
+     double-entry integrity and leg-protection, search/sort, dashboard,
+     CSV export, Debug/localStorage, reload persistence, close/reopen
+     persistence, and the CSV import round-trip.
+- KEEP: the GitHub Pages + browser-only localStorage Gate 5 rescope;
+  direct reuse of Gate 2 domain services rather than a second bookkeeping
+  rule implementation; clean separation between this public prototype and
+  any future real auth/multi-user/database/zanzan.tw integration;
+  production E2E reusing the same parity spec with only runtime config
+  swapped; keeping `goto('./')` since GitHub Pages project sites have a
+  non-root base path; the sandbox egress-proxy retry/timeout/HTTP2
+  workarounds staying confined to the production-evidence Playwright
+  config, not treated as product runtime behavior.
+- REVIEW NOTES: `ignoreHTTPSErrors: true` and the explicit proxy setting
+  are this session's sandbox/egress-testing workaround, not a statement
+  about the real deployment's TLS — the public deployment itself already
+  had independent HTTP 200 + successful GitHub Pages deploy evidence, so
+  this does not block Final PASS. The CSV import transfer_code
+  non-round-trip limitation was disclosed and accepted in the prior Gate
+  5 submission and remains a documented, accepted prototype-scope
+  limitation. `project.json` holding Gate 5 as `in_progress`/
+  `CONDITIONAL PASS` at the time of the closure commit was correct as a
+  pre-review state; this Final PASS triggers the one-time post-review
+  finalization below.
+- NEXT — Post-review finalization (per ChatGPT's explicit instructions):
+  1. Gate 5 status → `passed`, review → `PASS` / `MUST FIX: NONE` (done,
+     see `project.json`).
+  2. Mark **v1.0 MIGRATION BASELINE FROZEN** (done, see `project.json`).
+  3. Record this Final PASS in the Gate 5 report / project journal (this
+     section).
+  4. Per the original Kickoff branch contract, merge the reviewed
+     `migration/v1` result into `main` (via PR if the repo's existing
+     workflow requires one; no already-reviewed content is altered).
+  5. Once synced: **Zanzan Cash Service Migration v1.0 is formally
+     CLOSED.** No Gate 6 exists and none is to be opened.
+
+**PROJECT STATUS: v1.0 MIGRATION BASELINE FROZEN — CLOSED.**
