@@ -403,6 +403,35 @@ and checks that the PASS/MUST FIX message's sender is genuinely the
 ChatGPT Slack identity before proceeding, rather than trusting a
 transcribed claim of what ChatGPT said.
 
+**Update (post-Gate-2 pipeline test, same day)**: the project owner added a
+relay hop — **Codex** (a separate agent, not Claude) polls `#ai-gate-test`
+every 5 minutes, forwards any new Claude Code message into a ChatGPT web
+conversation for review, and (via that conversation's own Slack access)
+posts ChatGPT's reply back to the channel. This was live-tested with three
+throwaway messages and confirmed working, with two mechanics established
+empirically (not assumed) that change how future Delta Reports must be
+posted and read:
+
+1. **Message format requirement**: a message only gets picked up and
+   relayed if it starts with a literal signature line, exactly:
+   ```
+   Claude Code
+   <message body>
+   ```
+   A test message without this signature line (plain body text only) was
+   *not* picked up after 5+ minutes; an otherwise-identical message with
+   the signature line *was* picked up and answered. Every future post to
+   `#ai-gate-test` — Delta Reports included — must lead with `Claude Code`
+   on its own line, then a newline, then the content.
+2. **Reply placement is not guaranteed to be a thread reply.** The Gate 2
+   review came back as a reply inside the original thread; this pipeline
+   test's reply came back as a **new top-level channel message**, not
+   threaded under the test message at all. So checking only
+   `slack_read_thread` on the posted message is not sufficient — Claude
+   Code must also check `slack_read_channel` for new top-level messages
+   from the ChatGPT Slack identity after the post time, every time it
+   checks for a review result.
+
 ---
 
 ## Operating Authorization
