@@ -7,6 +7,22 @@
 export type Status = 'active' | 'inactive';
 export type CategoryType = 'income' | 'expense';
 export type TenantRole = 'owner';
+export type UserRole = 'member' | 'platform_admin';
+
+/**
+ * Standalone identity (Gate 3) — replaces WordPress user records. See
+ * docs/architecture/auth-entitlement-abstraction.md. `platform_admin`
+ * mirrors the legacy `manage_options` capability: bypasses entitlement
+ * checks but still needs a bound tenant for tenant-scoped endpoints
+ * (domain-boundaries.md → Entitlement).
+ */
+export interface User {
+  id: string;
+  email: string;
+  passwordHash: string;
+  role: UserRole;
+  createdAt: Date;
+}
 
 export interface Tenant {
   id: string;

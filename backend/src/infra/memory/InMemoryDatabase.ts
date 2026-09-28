@@ -1,4 +1,4 @@
-import type { Account, CashEntry, Category, Tenant, TenantMembership } from '../../domain/types.js';
+import type { Account, CashEntry, Category, Tenant, TenantMembership, User } from '../../domain/types.js';
 
 let nextId = 1;
 /** Simple incrementing id generator, good enough for Gate 2's in-memory store and tests. */
@@ -22,4 +22,5 @@ export class InMemoryDatabase {
   readonly accounts = new Map<string, Account>();
   readonly categories = new Map<string, Category>();
   readonly entries = new Map<string, CashEntry>();
+  readonly users = new Map<string, User>();
 }

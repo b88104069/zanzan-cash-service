@@ -48,8 +48,19 @@
     {
       "id": 3,
       "name": "Standalone API + Identity / Entitlement Boundary",
-      "status": "in_progress",
-      "dependsOn": [2]
+      "status": "awaiting_review",
+      "dependsOn": [2],
+      "outputs": [
+        "backend/prisma/",
+        "backend/src/http/",
+        "backend/src/infra/prisma/",
+        "backend/src/infra/entitlement/",
+        "backend/src/domain/entitlement/",
+        "backend/openapi.yaml",
+        "backend/test/http/",
+        "backend/test/integration/",
+        "reports/gate-3-delta-report.md"
+      ]
     },
     {
       "id": 4,

@@ -9,6 +9,7 @@ import { InMemoryCashEntryRepository } from '../src/infra/memory/InMemoryCashEnt
 import { InMemoryCategoryRepository } from '../src/infra/memory/InMemoryCategoryRepository.js';
 import { InMemoryDatabase } from '../src/infra/memory/InMemoryDatabase.js';
 import { InMemoryTenantRepository } from '../src/infra/memory/InMemoryTenantRepository.js';
+import { InMemoryUnitOfWork } from '../src/infra/memory/InMemoryUnitOfWork.js';
 
 /** Fresh, isolated wiring for each test — no shared state between tests. */
 export function createHarness() {
@@ -18,10 +19,11 @@ export function createHarness() {
   const accountRepo = new InMemoryAccountRepository(db);
   const categoryRepo = new InMemoryCategoryRepository(db);
   const entryRepo = new InMemoryCashEntryRepository(db);
+  const uow = new InMemoryUnitOfWork({ tenants: tenantRepo, accounts: accountRepo, categories: categoryRepo });
 
   const accountService = new AccountService(accountRepo, entryRepo);
   const categoryService = new CategoryService(categoryRepo);
-  const tenantService = new TenantService(tenantRepo, accountRepo, categoryRepo);
+  const tenantService = new TenantService(tenantRepo, uow);
   const cashEntryService = new CashEntryService(entryRepo, accountService, categoryService);
   const transferService = new TransferService(entryRepo, accountService);
   const exportService = new ExportService(entryRepo);
