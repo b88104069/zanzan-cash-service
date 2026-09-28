@@ -312,3 +312,27 @@ th {
     grid-column: span 1;
   }
 }
+
+.debug-panel {
+  border: 1px dashed #94a3b8;
+  border-radius: 12px;
+  padding: 16px;
+  background: #f8fafc;
+}
+
+.debug-note {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.debug-textarea {
+  width: 100%;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+}

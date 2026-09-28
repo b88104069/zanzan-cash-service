@@ -1,12 +1,74 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../api/useApi';
-import { useAuth } from '../../auth/AuthContext';
-import { useTenant } from '../../tenant/TenantContext';
-import { downloadCsv } from '../../api/client';
+import { useLocalServices } from '../../localdb/LocalDataProvider';
+import { localCsvExport } from '../../localdb/localRouter';
 import type { CashEntry, EntryFilter } from '../../api/types';
 
 function formatNumber(n: number): string {
   return n.toLocaleString('zh-TW');
+}
+
+const CSV_HEADER = ['日期', '帳戶', '科目', '摘要', '收入', '支出', '備註'];
+
+function toCsvText(rows: { entryDate: string; account: string; category: string; memo: string; income: number; expense: number; note: string }[]): string {
+  const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+  const lines = [CSV_HEADER.map(escape).join(',')];
+  for (const r of rows) {
+    lines.push([r.entryDate, r.account, r.category, r.memo, String(r.income), String(r.expense), r.note].map(escape).join(','));
+  }
+  return '﻿' + lines.join('\r\n');
+}
+
+/** Minimal CSV parser matching the export format: quoted fields, doubled-quote escaping, CRLF or LF rows. */
+function parseCsvText(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  const body = text.replace(/^﻿/, '');
+
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i];
+    if (inQuotes) {
+      if (char === '"' && body[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        field += char;
+      }
+    } else if (char === '"') {
+      inQuotes = true;
+    } else if (char === ',') {
+      row.push(field);
+      field = '';
+    } else if (char === '\r') {
+      // ignore, \n handles the row break
+    } else if (char === '\n') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((cell) => cell.trim() !== ''));
+}
+
+function downloadTextFile(text: string, filename: string, mime: string): void {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 interface Props {
@@ -15,14 +77,24 @@ interface Props {
   onDeleted: () => void;
 }
 
-/** Parity: legacy 明細表 — filterable/sortable list, edit/delete row actions, CSV export. */
+/**
+ * Parity: legacy 明細表 — filterable/sortable list, edit/delete row actions,
+ * CSV export. CSV import is a Gate 5 addition (scope item 12, "if
+ * reasonable to add") — legacy never had one. Known limitation: the
+ * exported CSV (matching legacy's own export format) doesn't carry
+ * transfer_code, so re-importing a file that included transfer legs
+ * recreates them as ordinary unpaired entries, not reconstructed transfers
+ * — documented in reports/gate-5-delta-report.md, not silently glossed
+ * over.
+ */
 export function EntryList({ refreshKey, onEdit, onDeleted }: Props) {
   const api = useApi();
-  const { token } = useAuth();
-  const { currentTenantId } = useTenant();
+  const services = useLocalServices();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [rows, setRows] = useState<CashEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [keyword, setKeyword] = useState('');
@@ -61,12 +133,45 @@ export function EntryList({ refreshKey, onEdit, onDeleted }: Props) {
   }
 
   async function handleExport() {
-    if (!token || !currentTenantId) return;
     try {
-      await downloadCsv('/cash-entries/export', { token, tenantId: currentTenantId, query: filter as Record<string, string | number | undefined> }, `cash-export-${Date.now()}.csv`);
+      const csvRows = await localCsvExport(services, filter as Record<string, string | number | undefined>);
+      downloadTextFile(toCsvText(csvRows), `cash-export-${Date.now()}.csv`, 'text/csv;charset=utf-8');
     } catch (err) {
       setError(err instanceof Error ? err.message : '匯出失敗');
     }
+  }
+
+  function handleImportClick() {
+    fileInputRef.current?.click();
+  }
+
+  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setImportMessage(null);
+    setError(null);
+    const text = await file.text();
+    const parsedRows = parseCsvText(text);
+    const dataRows = parsedRows[0]?.[0] === CSV_HEADER[0] ? parsedRows.slice(1) : parsedRows;
+
+    let success = 0;
+    let failed = 0;
+    for (const [entryDate, account, category, memo, income, expense, note] of dataRows) {
+      try {
+        await api('/cash-entries', {
+          method: 'POST',
+          body: { date: entryDate, account, category, memo, income: Number(income) || 0, expense: Number(expense) || 0, note: note ?? '' },
+        });
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+
+    setImportMessage(`匯入完成：成功 ${success} 筆，失敗 ${failed} 筆${failed > 0 ? '（失敗原因通常是帳戶或科目不存在，請先確認帳戶/科目管理）' : ''}`);
+    onDeleted(); // reuses the same "something changed, refresh everything" callback
   }
 
   return (
@@ -112,10 +217,15 @@ export function EntryList({ refreshKey, onEdit, onDeleted }: Props) {
           <button type="button" className="export-btn" onClick={handleExport}>
             匯出CSV
           </button>
+          <button type="button" className="secondary" onClick={handleImportClick}>
+            匯入CSV
+          </button>
+          <input ref={fileInputRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={handleImportFile} />
         </div>
       </div>
 
       {error && <div className="error-text">{error}</div>}
+      {importMessage && <div className="success-text">{importMessage}</div>}
 
       <div className="table-wrap">
         <table>

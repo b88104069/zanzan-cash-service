@@ -1,9 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
-// Uses the environment's pre-installed Chromium rather than downloading one
-// (see this session's environment notes: PLAYWRIGHT_BROWSERS_PATH points at
-// /opt/pw-browsers). The backend must already be running separately
-// (see e2e/README.md) — this config only starts the frontend dev server.
+// Gate 5 (ACTIVE): no backend server needed at all — this app is fully
+// client-side (browser localStorage). Uses the environment's pre-installed
+// Chromium rather than downloading one (PLAYWRIGHT_BROWSERS_PATH points at
+// /opt/pw-browsers).
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
