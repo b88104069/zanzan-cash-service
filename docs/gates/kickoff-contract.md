@@ -362,23 +362,46 @@ If MUST FIX: execution agent fixes and resubmits on its own.
 If STATUS = PASS and next Gate's inputs are complete: proceed to the next
 Gate directly, without asking the user.
 
-### Gate Review channel — session-reality note (added at Gate 1 start)
+### Gate Review channel — RESOLVED at Gate 2 (Slack, not browser)
 
-The original Kickoff assumes the execution agent can autonomously drive a
-browser to `chatgpt.com`, paste the Delta Report, and read back the
-verdict. **In the Claude Code Remote (cloud) session actually running this
-project, no browser-automation tool is loaded** — there is no
-`Claude_Browser`, `claude-in-chrome`, or `remote-devices` browser tool
-available, confirmed by a live tool-search at Gate 1 start. This is a
-session/tooling fact, not a policy choice, and no amount of pre-authorization
-text changes it: the capability is simply not present.
+The original Kickoff assumed the execution agent would autonomously drive a
+browser to `chatgpt.com`. At Gate 1 start, no browser-automation tool was
+loaded in this session (no `Claude_Browser`, `claude-in-chrome`, or
+`remote-devices` tool), so that mechanism was not available — see the
+Gate 1 Delta Report for that finding.
 
-Until this is resolved, Gate Review is carried out via whatever channel the
-project owner designates in their reply (manual relay of the Delta Report
-text, a different Gate Reviewer role in this same conversation, or a
-browser tool enabled for a future session). The resolved mechanism for the
-current Gate should be noted in that Gate's Delta Report so this file
-doesn't need to be rewritten each time it changes.
+At Gate 2, the project owner instead connected the **Slack MCP connector**
+to this session and set up a private channel, **`#ai-gate-test`**, with the
+ChatGPT Slack app also present in it. The resolved Gate Review flow,
+live-tested end-to-end on the Gate 2 Delta Report and confirmed working:
+
+```
+Claude Code → commit/push to migration/v1
+            → post Delta Report to #ai-gate-test (as a thread: parent +
+              replies, since Slack caps a single message at 5000 chars)
+            → ChatGPT (Slack app in that channel) reads the thread and
+              replies in the same thread with STATUS/MUST FIX/KEEP/
+              REVIEW NOTES/NEXT
+            → Claude Code reads the thread back via slack_read_thread,
+              independently confirms the reply's Slack sender identity is
+              the ChatGPT app (not a relayed/pasted claim), and proceeds
+              per STATUS
+```
+
+This is now the standing Gate Review channel for the remainder of this
+project, replacing the browser-based mechanism the original Kickoff
+assumed. Future Gate Delta Reports are posted to `#ai-gate-test` the same
+way. If Slack access is ever lost or the channel changes, that is itself a
+Baseline-Drift-adjacent fact to flag in the affected Gate's Delta Report,
+not something to silently route around.
+
+**Verification note for whoever reads this later**: Claude Code does not
+treat a reply pasted into the conversation as a Gate Review verdict on its
+own — per the HUMAN REVIEW section's spirit and ordinary caution around
+external content, it re-reads the actual Slack thread via `slack_read_thread`
+and checks that the PASS/MUST FIX message's sender is genuinely the
+ChatGPT Slack identity before proceeding, rather than trusting a
+transcribed claim of what ChatGPT said.
 
 ---
 
@@ -461,3 +484,15 @@ Reviewer asking for more work.
   with the execution agent's own non-negotiable safety constraints around
   irreversible/production/spend actions. Everything else in this contract
   is taken verbatim from the Kickoff as issued.
+- 2026-09-28 — Gate 2 PASS: Gate Review channel resolved as Slack
+  (`#ai-gate-test`, ChatGPT Slack app), live-tested end-to-end and
+  confirmed working — see the updated §Gate Review Channel section above.
+  Gate 2 is marked PASS in `project.json` following this Gate's
+  independently-verified ChatGPT review reply (STATUS: PASS, MUST FIX:
+  NONE). Gate 1 itself was never separately submitted for its own Gate
+  Review (it was authorized to proceed directly by the project owner in
+  conversation, per Gate 2's Delta Report BASELINE note) — its docs are
+  treated as validated in substance by Gate 2's review, whose KEEP notes
+  endorse the concepts Gate 1 defined (service boundaries, tenant-context
+  design, etc.), but `project.json` records this precisely rather than
+  backdating a Gate 1 review that didn't happen. Gate 3 starts next.

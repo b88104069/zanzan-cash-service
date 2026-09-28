@@ -16,7 +16,8 @@
     {
       "id": 1,
       "name": "Project Contract + Architecture Freeze",
-      "status": "awaiting_review",
+      "status": "not_separately_reviewed",
+      "note": "Never submitted for its own Gate Review; owner authorized proceeding to Gate 2 directly. Validated in substance by Gate 2's review (KEEP notes endorse Gate 1's concepts).",
       "outputs": [
         "CLAUDE.md",
         "project.json",
@@ -28,7 +29,14 @@
     {
       "id": 2,
       "name": "Characterization Tests + Standalone Core",
-      "status": "awaiting_review",
+      "status": "passed",
+      "review": {
+        "channel": "slack",
+        "chatgptStatus": "PASS",
+        "mustFix": "NONE",
+        "threadUrl": "https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790567339921299",
+        "verifiedBy": "slack_read_thread sender-identity check (ChatGPT Slack app)"
+      },
       "dependsOn": [1],
       "outputs": [
         "backend/src/domain/",
@@ -40,7 +48,7 @@
     {
       "id": 3,
       "name": "Standalone API + Identity / Entitlement Boundary",
-      "status": "pending",
+      "status": "in_progress",
       "dependsOn": [2]
     },
     {

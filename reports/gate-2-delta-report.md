@@ -162,3 +162,47 @@ Gate Review — plus the still-open question from the Gate 1 Delta Report
 about which channel carries it (manual relay, a browser tool, or this
 conversation acting as Reviewer). Per the owner's message, that question is
 being looked at separately and did not block starting Gate 2.
+
+---
+
+GATE REVIEW RESULT (appended after review)
+
+- Channel: Slack, `#ai-gate-test` (private channel), ChatGPT Slack app —
+  the project owner connected the Slack MCP connector and set up this
+  channel specifically to test the Gate Review loop. This report was
+  posted as a thread (parent + 4 replies, due to Slack's 5000-char message
+  limit): https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790567339921299
+- ChatGPT replied in the same thread. Before acting on it, Claude Code
+  independently re-read the thread via `slack_read_thread` (rather than
+  trusting a pasted transcription of the reply) and confirmed the reply's
+  Slack sender identity is the ChatGPT app itself, not a relayed claim.
+- **STATUS: PASS**
+- MUST FIX: NONE
+- KEEP: all six domain services correctly abstracted; zero WordPress/
+  WooCommerce dependency verified by automated check; tenant context is
+  explicit (`tenantId`), removing the legacy `user_meta` implicit-state
+  dependency; 33/33 characterization tests passing, with the suite shown to
+  be effective (it caught a real validation-order bug and a false-positive
+  in the dependency-scan test itself); transfer atomicity and paired-entry
+  integrity guard preserve legacy behavior correctly.
+- REVIEW NOTES: (1) entitlement P1-P4 deferred to Gate 3 — reasonable;
+  (2) transfer deletion living in `CashEntryService` rather than
+  `TransferService` is acceptable, since the current goal is migration
+  fidelity, not redesigning the domain model; (3) in-memory repository is
+  acceptable Gate 2 scaffolding, but Gate 3/4 must verify real DB
+  transaction/rollback/constraint behavior; (4) `cash_entries.category` as
+  a string is correctly preserved per characterization principles — Gate 4
+  migration design decides whether to improve it.
+- NEXT: Proceed to Gate 3 — Standalone API + Identity/Entitlement Boundary.
+  ChatGPT's reply additionally scoped Gate 3 to include a Prisma/MySQL
+  persistence adapter and real transaction-semantics validation alongside
+  the Kickoff's original Gate 3 items (API layer, auth boundary,
+  EntitlementService abstraction, tenant isolation tests) — consistent
+  with `docs/architecture/migration-sequence.md`'s "Gate 3+" placement of
+  the real DB adapter, not a scope expansion beyond what Gate 1 already
+  anticipated.
+- This exchange also served as the first live end-to-end test of the
+  Slack-based Gate Review channel itself (Claude Code → GitHub →
+  Slack → ChatGPT → Slack → Claude Code). It worked. See
+  `docs/gates/kickoff-contract.md` §Gate Review Channel, which has been
+  updated to record Slack as the resolved channel going forward.
