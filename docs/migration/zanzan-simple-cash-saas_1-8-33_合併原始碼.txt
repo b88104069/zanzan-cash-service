@@ -1,0 +1,2205 @@
+================================================================
+zanzan-simple-cash-saas_1-8-33 原始碼合併檔
+產生時間：2026-09-28 08:46:01
+共 9 個文字檔案（另有 0 個二進位檔案僅列於資料夾結構）
+================================================================
+
+【資料夾結構】
+zanzan-simple-cash-saas_1-8-33/
+├── assets/
+│   ├── css/
+│   │   └── cashbook.css
+│   └── js/
+│       └── cashbook.js
+├── includes/
+│   ├── api.php
+│   ├── install.php
+│   ├── my-account.php
+│   ├── tenant.php
+│   └── woocommerce-hooks.php
+├── public/
+│   └── shortcode-cashbook.php
+└── zanzan-simple-cash-saas.php
+
+================================================================
+檔案路徑：includes/api.php
+================================================================
+<?php
+// api.php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+add_action('rest_api_init', function () {
+    $standard_routes = [
+        ['/cash-entry', 'POST', 'zzscs_api_add_cash_entry'],
+        ['/cash-entry-update', 'POST', 'zzscs_api_update_cash_entry'],
+        ['/cash-entry-delete', 'POST', 'zzscs_api_delete_cash_entry'],
+        ['/cash-summary', 'GET', 'zzscs_api_cash_summary'],
+        ['/cash-list', 'GET', 'zzscs_api_cash_list'],
+        ['/cash-export', 'GET', 'zzscs_api_cash_export'],
+        ['/tenant-switch', 'POST', 'zzscs_api_switch_tenant'],
+        ['/account-summary', 'GET', 'zzscs_api_account_summary'],
+        ['/accounts', 'GET', 'zzscs_api_get_accounts'],
+        ['/account-list', 'GET', 'zzscs_api_account_list'],
+        ['/account-create', 'POST', 'zzscs_api_account_create'],
+        ['/account-update', 'POST', 'zzscs_api_account_update'],
+        ['/account-disable', 'POST', 'zzscs_api_account_disable'],
+        ['/account-enable', 'POST', 'zzscs_api_account_enable'],
+        ['/transfer-create', 'POST', 'zzscs_api_transfer_create'],
+        ['/categories', 'GET', 'zzscs_api_get_categories'],
+        ['/category-list', 'GET', 'zzscs_api_category_list'],
+        ['/category-create', 'POST', 'zzscs_api_category_create'],
+        ['/category-update', 'POST', 'zzscs_api_category_update'],
+        ['/category-disable', 'POST', 'zzscs_api_category_disable'],
+        ['/category-enable', 'POST', 'zzscs_api_category_enable']
+    ];
+
+    foreach ($standard_routes as $route) {
+        register_rest_route('zanzan-erp/v1', $route[0], [
+            'methods'             => $route[1],
+            'callback'            => $route[2],
+            'permission_callback' => 'zzscs_api_permission_check',
+        ]);
+    }
+
+    $tenant_routes = [
+        ['/tenants', 'GET', 'zzscs_api_get_tenants'],
+        ['/tenant-create', 'POST', 'zzscs_api_create_tenant'],
+    ];
+
+    foreach ($tenant_routes as $route) {
+        register_rest_route('zanzan-erp/v1', $route[0], [
+            'methods'             => $route[1],
+            'callback'            => $route[2],
+            'permission_callback' => 'zzscs_api_tenant_permission_check',
+        ]);
+    }
+});
+
+// ==========================================
+// 權限驗證閘道
+// ==========================================
+function zzscs_check_subscription_access() {
+    if (!function_exists('wcs_user_has_subscription')) {
+        return new WP_Error('zzscs_subscription_system_unavailable', '訂閱驗證系統目前不可用，請聯絡管理員。', ['status' => 503]);
+    }
+
+    $uid = get_current_user_id();
+    $required_product_id = defined('ZZSCS_REQUIRED_PRODUCT_ID') ? ZZSCS_REQUIRED_PRODUCT_ID : 0; 
+
+    $ok = ($required_product_id > 0) 
+        ? (wcs_user_has_subscription($uid, $required_product_id, 'active') || wcs_user_has_subscription($uid, $required_product_id, 'pending-cancel'))
+        : (wcs_user_has_subscription($uid, '', 'active') || wcs_user_has_subscription($uid, '', 'pending-cancel'));
+
+    if (!$ok) {
+        return new WP_Error('zzscs_no_subscription', 'API 存取被拒：請先訂閱方案。', ['status' => 403]);
+    }
+    return true;
+}
+
+function zzscs_api_permission_check() {
+    if (!is_user_logged_in()) return new WP_Error('zzscs_not_logged_in', '請先登入。', ['status' => 401]);
+
+    if (!current_user_can('manage_options')) {
+        $sub_check = zzscs_check_subscription_access();
+        if (is_wp_error($sub_check)) return $sub_check;
+    }
+
+    if (!zzscs_current_user_has_tenant()) return new WP_Error('zzscs_no_tenant', '目前帳號尚未綁定公司資料。', ['status' => 403]);
+    
+    return true;
+}
+
+function zzscs_api_tenant_permission_check() {
+    if (!is_user_logged_in()) return new WP_Error('zzscs_not_logged_in', '請先登入。', ['status' => 401]);
+
+    if (!current_user_can('manage_options')) {
+        $sub_check = zzscs_check_subscription_access();
+        if (is_wp_error($sub_check)) return $sub_check;
+    }
+    return true;
+}
+
+// ==========================================
+// 記帳 API (100% 完整程式碼展開)
+// ==========================================
+function zzscs_api_add_cash_entry(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $user_id   = get_current_user_id();
+
+    $date     = sanitize_text_field($request->get_param('date'));
+    $memo     = sanitize_text_field($request->get_param('memo'));
+    $category = sanitize_text_field($request->get_param('category'));
+    $account  = sanitize_text_field($request->get_param('account'));
+    $income   = floatval($request->get_param('income'));
+    $expense  = floatval($request->get_param('expense'));
+    $note     = sanitize_textarea_field($request->get_param('note'));
+
+    if (empty($date)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫日期。'], 400);
+    if (empty($memo)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫摘要。'], 400);
+    if (empty($category)) return new WP_REST_Response(['status' => 'error', 'message' => '請選擇或填寫科目。'], 400);
+
+    if ($income > 0 && $expense > 0) return new WP_REST_Response(['status' => 'error', 'message' => '收入與支出不可同時大於0。'], 400);
+    if ($income <= 0 && $expense <= 0) return new WP_REST_Response(['status' => 'error', 'message' => '請輸入大於0的金額。'], 400);
+
+    $table_accounts   = $wpdb->prefix . 'zz_cash_accounts';
+    $table_categories = $wpdb->prefix . 'zz_cash_categories';
+    $table_entries    = $wpdb->prefix . 'zz_cash_entries';
+
+    $account_row = $wpdb->get_row($wpdb->prepare("SELECT id FROM {$table_accounts} WHERE tenant_id = %d AND account_name = %s AND status = 'active' LIMIT 1", $tenant_id, $account));
+    if (!$account_row) return new WP_REST_Response(['status' => 'error', 'message' => '選擇的帳戶不存在或已停用。'], 400);
+    $account_id = absint($account_row->id);
+
+    $cat_type = ($income > 0) ? 'income' : 'expense';
+    $cat_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_categories} WHERE tenant_id = %d AND category_name = %s AND category_type = %s AND status = 'active'", $tenant_id, $category, $cat_type));
+    if (!$cat_exists) return new WP_REST_Response(['status' => 'error', 'message' => '請從下拉清單選擇正確的科目，或先至下方「科目管理」新增此科目。'], 400);
+
+    $inserted = $wpdb->insert($table_entries, [
+        'tenant_id'  => $tenant_id,
+        'entry_date' => $date,
+        'memo'       => $memo,
+        'category'   => $category,
+        'account_id' => $account_id,
+        'income'     => $income,
+        'expense'    => $expense,
+        'note'       => $note,
+        'created_by' => $user_id,
+        'created_at' => current_time('mysql'),
+    ], ['%d', '%s', '%s', '%s', '%d', '%f', '%f', '%s', '%d', '%s']);
+
+    if ($inserted === false) return new WP_REST_Response(['status' => 'error', 'message' => '寫入失敗。'], 500);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '新增成功', 'id' => absint($wpdb->insert_id)], 200);
+}
+
+function zzscs_api_update_cash_entry(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $entry_id  = absint($request->get_param('entry_id'));
+
+    $date     = sanitize_text_field($request->get_param('date'));
+    $memo     = sanitize_text_field($request->get_param('memo'));
+    $category = sanitize_text_field($request->get_param('category'));
+    $account  = sanitize_text_field($request->get_param('account'));
+    $income   = floatval($request->get_param('income'));
+    $expense  = floatval($request->get_param('expense'));
+    $note     = sanitize_textarea_field($request->get_param('note'));
+
+    if ($entry_id <= 0) return new WP_REST_Response(['status' => 'error', 'message' => 'entry_id 不正確。'], 400);
+    if (empty($date)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫日期。'], 400);
+    if (empty($memo)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫摘要。'], 400);
+    if (empty($category)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫科目。'], 400);
+
+    if ($income > 0 && $expense > 0) return new WP_REST_Response(['status' => 'error', 'message' => '收入與支出不可同時大於0。'], 400);
+    if ($income <= 0 && $expense <= 0) return new WP_REST_Response(['status' => 'error', 'message' => '請輸入大於0的金額。'], 400);
+
+    $table_entries    = $wpdb->prefix . 'zz_cash_entries';
+    $table_accounts   = $wpdb->prefix . 'zz_cash_accounts';
+    $table_categories = $wpdb->prefix . 'zz_cash_categories';
+
+    $entry = $wpdb->get_row($wpdb->prepare("SELECT transfer_code FROM {$table_entries} WHERE id = %d AND tenant_id = %d", $entry_id, $tenant_id));
+    if (!$entry) return new WP_REST_Response(['status' => 'error', 'message' => '找不到這筆資料。'], 404);
+    if (!empty($entry->transfer_code)) return new WP_REST_Response(['status' => 'error', 'message' => '轉帳紀錄不可單獨修改，請刪除後重新轉帳。'], 409);
+
+    $account_row = $wpdb->get_row($wpdb->prepare("SELECT id FROM {$table_accounts} WHERE tenant_id = %d AND account_name = %s AND status = 'active' LIMIT 1", $tenant_id, $account));
+    if (!$account_row) return new WP_REST_Response(['status' => 'error', 'message' => '選擇的帳戶不存在或已停用。'], 400);
+    $account_id = absint($account_row->id);
+
+    $cat_type = ($income > 0) ? 'income' : 'expense';
+    $cat_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_categories} WHERE tenant_id = %d AND category_name = %s AND category_type = %s AND status = 'active'", $tenant_id, $category, $cat_type));
+    if (!$cat_exists) return new WP_REST_Response(['status' => 'error', 'message' => '請從下拉清單選擇正確的科目，或先至下方「科目管理」新增此科目。'], 400);
+
+    $updated = $wpdb->update($table_entries, [
+        'entry_date' => $date,
+        'memo'       => $memo,
+        'category'   => $category,
+        'account_id' => $account_id,
+        'income'     => $income,
+        'expense'    => $expense,
+        'note'       => $note,
+    ], ['id' => $entry_id, 'tenant_id' => $tenant_id], ['%s', '%s', '%s', '%d', '%f', '%f', '%s'], ['%d', '%d']);
+
+    if ($updated === false) return new WP_REST_Response(['status' => 'error', 'message' => '更新失敗'], 500);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '更新成功', 'id' => $entry_id], 200);
+}
+
+function zzscs_api_delete_cash_entry(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $entry_id  = absint($request->get_param('entry_id'));
+    if (!$entry_id) return new WP_REST_Response(['status' => 'error', 'message' => 'entry_id 錯誤。'], 400);
+
+    $table = $wpdb->prefix . 'zz_cash_entries';
+    $entry = $wpdb->get_row($wpdb->prepare("SELECT transfer_code FROM {$table} WHERE id = %d AND tenant_id = %d", $entry_id, $tenant_id));
+    if (!$entry) return new WP_REST_Response(['status' => 'error', 'message' => '找不到資料。'], 404);
+
+    if (!empty($entry->transfer_code)) {
+        $wpdb->query('START TRANSACTION');
+        
+        $count = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table} WHERE transfer_code = %s AND tenant_id = %d", $entry->transfer_code, $tenant_id));
+        if ($count != 2) {
+            $wpdb->query('ROLLBACK');
+            return new WP_REST_Response(['status' => 'error', 'message' => '轉帳資料異常（筆數不符），為保護帳本平衡，拒絕刪除。'], 409);
+        }
+
+        $deleted = $wpdb->delete($table, ['transfer_code' => $entry->transfer_code, 'tenant_id' => $tenant_id], ['%s', '%d']);
+        
+        if ($deleted === false || $deleted != 2) {
+            $wpdb->query('ROLLBACK');
+            return new WP_REST_Response(['status' => 'error', 'message' => '刪除轉帳失敗。'], 500);
+        }
+        
+        $wpdb->query('COMMIT');
+    } else {
+        $deleted = $wpdb->delete($table, ['id' => $entry_id, 'tenant_id' => $tenant_id], ['%d', '%d']);
+        if ($deleted === false || $deleted < 1) {
+            return new WP_REST_Response(['status' => 'error', 'message' => '刪除失敗或資料不存在。'], 500);
+        }
+    }
+    
+    return new WP_REST_Response(['status' => 'ok', 'message' => '刪除成功'], 200);
+}
+
+function zzscs_api_cash_summary() {
+    global $wpdb;
+    $tenant_id      = zzscs_get_current_tenant_id();
+    $table_entries  = $wpdb->prefix . 'zz_cash_entries';
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+
+    $start_of_month = wp_date('Y-m-01');
+    $end_of_month   = wp_date('Y-m-t');
+
+    $row = $wpdb->get_row(
+        $wpdb->prepare(
+            "SELECT 
+                COALESCE(SUM(income), 0) AS income_total,
+                COALESCE(SUM(expense), 0) AS expense_total,
+                COALESCE(SUM(CASE WHEN entry_date >= %s AND entry_date <= %s THEN income ELSE 0 END), 0) AS month_income,
+                COALESCE(SUM(CASE WHEN entry_date >= %s AND entry_date <= %s THEN expense ELSE 0 END), 0) AS month_expense
+             FROM {$table_entries} 
+             WHERE tenant_id = %d 
+             AND (transfer_code = '' OR transfer_code IS NULL)", 
+             $start_of_month, $end_of_month, 
+             $start_of_month, $end_of_month, 
+             $tenant_id
+        ), ARRAY_A);
+
+    $sql_balance = "SELECT SUM(a.opening_balance + COALESCE(e.total_income, 0) - COALESCE(e.total_expense, 0)) AS real_balance 
+                    FROM {$table_accounts} a 
+                    LEFT JOIN (SELECT account_id, SUM(income) AS total_income, SUM(expense) AS total_expense 
+                               FROM {$table_entries} WHERE tenant_id = %d GROUP BY account_id) e 
+                    ON a.id = e.account_id 
+                    WHERE a.tenant_id = %d AND a.status = 'active'";
+    
+    $real_balance = $wpdb->get_var($wpdb->prepare($sql_balance, $tenant_id, $tenant_id));
+
+    return new WP_REST_Response([
+        'status'       => 'ok',
+        'incomeTotal'  => floatval($row['income_total']),
+        'expenseTotal' => floatval($row['expense_total']),
+        'balance'      => floatval($real_balance),
+        'monthIncome'  => floatval($row['month_income']),
+        'monthExpense' => floatval($row['month_expense']),
+        'monthBalance' => floatval($row['month_income']) - floatval($row['month_expense']),
+    ], 200);
+}
+
+function zzscs_api_cash_list(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id      = zzscs_get_current_tenant_id();
+    $table_entries  = $wpdb->prefix . 'zz_cash_entries';
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+
+    $limit      = absint($request->get_param('limit'));
+    $start_date = sanitize_text_field($request->get_param('start_date'));
+    $end_date   = sanitize_text_field($request->get_param('end_date'));
+    $keyword    = sanitize_text_field($request->get_param('keyword'));
+    $order      = sanitize_text_field($request->get_param('order'));
+
+    if ($limit <= 0 || !in_array($limit, [10, 20, 50, 100], true)) $limit = 10;
+    $order_sql = ($order === 'asc') ? 'ASC' : 'DESC';
+
+    $where = "WHERE e.tenant_id = %d";
+    $params = [$tenant_id];
+
+    if (!empty($start_date)) { $where .= " AND e.entry_date >= %s"; $params[] = $start_date; }
+    if (!empty($end_date)) { $where .= " AND e.entry_date <= %s"; $params[] = $end_date; }
+    if (!empty($keyword)) {
+        $like = '%' . $wpdb->esc_like($keyword) . '%';
+        $where .= " AND (e.memo LIKE %s OR e.category LIKE %s OR a.account_name LIKE %s OR e.note LIKE %s)";
+        array_push($params, $like, $like, $like, $like);
+    }
+
+    $params[] = $limit;
+
+    $sql = "SELECT e.id, e.entry_date, e.memo, e.category, a.account_name AS account, e.income, e.expense, e.note, e.transfer_code 
+            FROM {$table_entries} e LEFT JOIN {$table_accounts} a ON e.account_id = a.id
+            {$where} ORDER BY e.entry_date {$order_sql}, e.id {$order_sql} LIMIT %d";
+
+    $rows = $wpdb->get_results($wpdb->prepare($sql, $params), ARRAY_A);
+    foreach ($rows as &$row) { $row['income'] = floatval($row['income']); $row['expense'] = floatval($row['expense']); }
+    return new WP_REST_Response(['status' => 'ok', 'data' => $rows], 200);
+}
+
+function zzscs_api_cash_export(WP_REST_Request $request) {
+    global $wpdb;
+    
+    $nonce = $request->get_param('_wpnonce');
+    if (!wp_verify_nonce($nonce, 'wp_rest')) {
+        return new WP_Error('invalid_nonce', '驗證失敗', ['status' => 403]);
+    }
+
+    $tenant_id      = zzscs_get_current_tenant_id();
+    $table_entries  = $wpdb->prefix . 'zz_cash_entries';
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+
+    $start_date = sanitize_text_field($request->get_param('start_date'));
+    $end_date   = sanitize_text_field($request->get_param('end_date'));
+    $keyword    = sanitize_text_field($request->get_param('keyword'));
+    $order      = sanitize_text_field($request->get_param('order'));
+    $order_sql = ($order === 'asc') ? 'ASC' : 'DESC';
+
+    $where = "WHERE e.tenant_id = %d";
+    $params = [$tenant_id];
+
+    if (!empty($start_date)) { $where .= " AND e.entry_date >= %s"; $params[] = $start_date; }
+    if (!empty($end_date)) { $where .= " AND e.entry_date <= %s"; $params[] = $end_date; }
+    if (!empty($keyword)) {
+        $like = '%' . $wpdb->esc_like($keyword) . '%';
+        $where .= " AND (e.memo LIKE %s OR e.category LIKE %s OR a.account_name LIKE %s OR e.note LIKE %s)";
+        array_push($params, $like, $like, $like, $like);
+    }
+
+    $sql = "SELECT e.entry_date, e.memo, e.category, a.account_name AS account, e.income, e.expense, e.note 
+            FROM {$table_entries} e LEFT JOIN {$table_accounts} a ON e.account_id = a.id
+            {$where} ORDER BY e.entry_date {$order_sql}, e.id {$order_sql}";
+
+    $rows = $wpdb->get_results($wpdb->prepare($sql, $params), ARRAY_A);
+    $filename = 'cash-export-' . date('Ymd-His') . '.csv';
+
+    nocache_headers();
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename=' . $filename);
+    $output = fopen('php://output', 'w');
+    fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
+    fputcsv($output, ['日期', '帳戶', '科目', '摘要', '收入', '支出', '備註']);
+    foreach ($rows as $row) { fputcsv($output, [$row['entry_date'], $row['account'], $row['category'], $row['memo'], $row['income'], $row['expense'], $row['note']]); }
+    fclose($output); exit;
+}
+
+function zzscs_api_get_tenants() {
+    global $wpdb;
+    $user_id = get_current_user_id();
+    $table_users = $wpdb->prefix . 'zz_tenant_users';
+    $table_tenants = $wpdb->prefix . 'zz_tenants';
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT t.id, t.company_name FROM {$table_users} tu INNER JOIN {$table_tenants} t ON tu.tenant_id = t.id WHERE tu.user_id = %d AND tu.status = 'active' AND t.status = 'active' ORDER BY t.id ASC", $user_id));
+    $current_tenant_id = zzscs_get_current_tenant_id();
+    $data = []; foreach ($rows as $row) { $data[] = ['id' => absint($row->id), 'name' => $row->company_name, 'current' => absint($row->id) === $current_tenant_id]; }
+    return new WP_REST_Response(['status' => 'ok', 'data' => $data], 200);
+}
+
+function zzscs_api_switch_tenant(WP_REST_Request $request) {
+    global $wpdb;
+    $user_id = get_current_user_id();
+    $tenant_id = absint($request->get_param('tenant_id'));
+    if ($tenant_id <= 0) return new WP_REST_Response(['status' => 'error', 'message' => 'tenant_id 不正確。'], 400);
+    $table_users = $wpdb->prefix . 'zz_tenant_users';
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_users} WHERE user_id = %d AND tenant_id = %d AND status = 'active'", $user_id, $tenant_id));
+    if (!$exists) return new WP_REST_Response(['status' => 'error', 'message' => '您沒有權限。'], 403);
+    update_user_meta($user_id, 'zz_default_tenant_id', $tenant_id);
+    return new WP_REST_Response(['status' => 'ok', 'message' => '切換成功'], 200);
+}
+
+function zzscs_api_create_tenant(WP_REST_Request $request) {
+    global $wpdb;
+    $user_id = get_current_user_id();
+    
+    $company_name = sanitize_text_field($request->get_param('company_name'));
+    $company_name = preg_replace('/[\pZ\pC]+/u', ' ', $company_name); 
+    $company_name = trim($company_name);
+    
+    if (!$user_id) return new WP_REST_Response(['status' => 'error', 'message' => '請先登入。'], 401);
+    if (empty($company_name)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫公司名稱。'], 400);
+
+    $table_tenants = $wpdb->prefix . 'zz_tenants';
+    $table_tenant_users = $wpdb->prefix . 'zz_tenant_users';
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+    $table_categories = $wpdb->prefix . 'zz_cash_categories'; 
+    $created_at = current_time('mysql');
+
+    $dup = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_tenants} WHERE owner_user_id = %d AND company_name = %s", $user_id, $company_name));
+    if ($dup) return new WP_REST_Response(['status' => 'error', 'message' => '您已經擁有相同名稱的公司。'], 400);
+
+    $wpdb->query('START TRANSACTION');
+
+    $insert_tenant = $wpdb->insert($table_tenants, ['company_name' => $company_name, 'owner_user_id' => $user_id, 'plan_code' => 'simple-cash-saas', 'status' => 'active', 'created_at' => $created_at], ['%s', '%d', '%s', '%s', '%s']);
+    if ($insert_tenant === false) { $wpdb->query('ROLLBACK'); return new WP_REST_Response(['status' => 'error', 'message' => '建立公司失敗。'], 500); }
+    
+    $tenant_id = absint($wpdb->insert_id);
+    
+    $i_user = $wpdb->insert($table_tenant_users, ['tenant_id' => $tenant_id, 'user_id' => $user_id, 'tenant_role' => 'owner', 'status' => 'active', 'created_at' => $created_at], ['%d', '%d', '%s', '%s', '%s']);
+    $i_acc  = $wpdb->insert($table_accounts, ['tenant_id' => $tenant_id, 'account_name' => '現金', 'account_type' => 'cash', 'opening_balance' => 0, 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%f', '%s', '%s']);
+    
+    $i_c1 = $wpdb->insert($table_categories, ['tenant_id' => $tenant_id, 'category_name' => '餐費', 'category_type' => 'expense', 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%s', '%s']);
+    $i_c2 = $wpdb->insert($table_categories, ['tenant_id' => $tenant_id, 'category_name' => '交通', 'category_type' => 'expense', 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%s', '%s']);
+    $i_c3 = $wpdb->insert($table_categories, ['tenant_id' => $tenant_id, 'category_name' => '住宿', 'category_type' => 'expense', 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%s', '%s']);
+    $i_c4 = $wpdb->insert($table_categories, ['tenant_id' => $tenant_id, 'category_name' => '一般收入', 'category_type' => 'income', 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%s', '%s']);
+
+    if ($i_user === false || $i_acc === false || $i_c1 === false || $i_c2 === false || $i_c3 === false || $i_c4 === false) {
+        $wpdb->query('ROLLBACK');
+        return new WP_REST_Response(['status' => 'error', 'message' => '初始化公司資料失敗，已還原。'], 500);
+    }
+
+    $wpdb->query('COMMIT');
+    
+    update_user_meta($user_id, 'zz_default_tenant_id', $tenant_id);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '公司建立成功', 'id' => $tenant_id, 'name' => $company_name], 200);
+}
+
+function zzscs_api_get_accounts() {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+    $rows = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT account_name FROM {$table_accounts} WHERE tenant_id = %d AND status = 'active' AND account_name <> '' ORDER BY account_name ASC", $tenant_id));
+    return new WP_REST_Response(['status' => 'ok', 'data' => $rows], 200);
+}
+
+function zzscs_api_account_summary() {
+    global $wpdb;
+    $tenant_id      = zzscs_get_current_tenant_id();
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+    $table_entries  = $wpdb->prefix . 'zz_cash_entries';
+
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT a.id, a.account_name, a.opening_balance, COALESCE(SUM(e.income), 0) AS total_income, COALESCE(SUM(e.expense), 0) AS total_expense FROM {$table_accounts} a LEFT JOIN {$table_entries} e ON a.id = e.account_id AND e.tenant_id = %d WHERE a.tenant_id = %d AND a.status = 'active' GROUP BY a.id, a.account_name, a.opening_balance ORDER BY a.account_name ASC", $tenant_id, $tenant_id), ARRAY_A);
+
+    $data = [];
+    foreach ($rows as $row) {
+        $opening = floatval($row['opening_balance']); $income = floatval($row['total_income']); $expense = floatval($row['total_expense']);
+        $data[] = ['id' => absint($row['id']), 'account_name' => $row['account_name'], 'total_income' => $income, 'total_expense' => $expense, 'balance' => $opening + $income - $expense];
+    }
+    return new WP_REST_Response(['status' => 'ok', 'data' => $data], 200);
+}
+
+function zzscs_api_account_list() {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT id, account_name, account_type, opening_balance, status, created_at FROM {$table_accounts} WHERE tenant_id = %d ORDER BY status DESC, account_name ASC", $tenant_id), ARRAY_A);
+    foreach ($rows as &$row) { $row['id'] = absint($row['id']); $row['opening_balance'] = floatval($row['opening_balance']); }
+    return new WP_REST_Response(['status' => 'ok', 'data' => $rows], 200);
+}
+
+function zzscs_api_account_create(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $account_name = sanitize_text_field($request->get_param('account_name'));
+    $account_type = sanitize_text_field($request->get_param('account_type'));
+    $opening_balance = floatval($request->get_param('opening_balance'));
+    
+    if (empty($account_name)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫帳戶名稱。'], 400);
+    if (empty($account_type)) $account_type = 'cash';
+    
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_accounts} WHERE tenant_id = %d AND account_name = %s", $tenant_id, $account_name));
+    if ($exists) return new WP_REST_Response(['status' => 'error', 'message' => '此帳戶名稱已存在。'], 400);
+    
+    $inserted = $wpdb->insert($table_accounts, ['tenant_id' => $tenant_id, 'account_name' => $account_name, 'account_type' => $account_type, 'opening_balance' => $opening_balance, 'status' => 'active', 'created_at' => current_time('mysql')], ['%d', '%s', '%s', '%f', '%s', '%s']);
+    if ($inserted === false) return new WP_REST_Response(['status' => 'error', 'message' => '新增失敗。'], 500);
+    
+    return new WP_REST_Response(['status' => 'ok', 'message' => '帳戶新增成功', 'id' => absint($wpdb->insert_id)], 200);
+}
+
+function zzscs_api_account_update(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $account_id = absint($request->get_param('account_id'));
+    $account_name = sanitize_text_field($request->get_param('account_name'));
+    $account_type = sanitize_text_field($request->get_param('account_type'));
+    $opening_balance = floatval($request->get_param('opening_balance'));
+    
+    if ($account_id <= 0) return new WP_REST_Response(['status' => 'error', 'message' => 'account_id 不正確。'], 400);
+    if (empty($account_name)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫帳戶名稱。'], 400);
+    if (empty($account_type)) $account_type = 'cash';
+    
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_accounts} WHERE id = %d AND tenant_id = %d", $account_id, $tenant_id));
+    if (!$exists) return new WP_REST_Response(['status' => 'error', 'message' => '找不到這個帳戶，或無權限修改。'], 404);
+
+    $duplicate = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_accounts} WHERE tenant_id = %d AND account_name = %s AND id <> %d", $tenant_id, $account_name, $account_id));
+    if ($duplicate) return new WP_REST_Response(['status' => 'error', 'message' => '此帳戶名稱已存在。'], 400);
+    
+    $updated = $wpdb->update($table_accounts, ['account_name' => $account_name, 'account_type' => $account_type, 'opening_balance' => $opening_balance], ['id' => $account_id, 'tenant_id' => $tenant_id], ['%s', '%s', '%f'], ['%d', '%d']);
+    if ($updated === false) return new WP_REST_Response(['status' => 'error', 'message' => '更新帳戶失敗。'], 500);
+    
+    return new WP_REST_Response(['status' => 'ok', 'message' => '帳戶更新成功'], 200);
+}
+
+function zzscs_api_account_disable(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $account_id = absint($request->get_param('account_id'));
+    if ($account_id <= 0) return new WP_REST_Response(['status' => 'error', 'message' => 'account_id 不正確。'], 400);
+
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_accounts} WHERE id = %d AND tenant_id = %d", $account_id, $tenant_id));
+    if (!$exists) return new WP_REST_Response(['status' => 'error', 'message' => '找不到這個帳戶。'], 404);
+
+    $updated = $wpdb->update($table_accounts, ['status' => 'inactive'], ['id' => $account_id, 'tenant_id' => $tenant_id], ['%s'], ['%d', '%d']);
+    if ($updated === false) return new WP_REST_Response(['status' => 'error', 'message' => '停用帳戶失敗。'], 500);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '帳戶已停用'], 200);
+}
+
+function zzscs_api_account_enable(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $account_id = absint($request->get_param('account_id'));
+    if ($account_id <= 0) return new WP_REST_Response(['status' => 'error', 'message' => 'account_id 不正確。'], 400);
+
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_accounts} WHERE id = %d AND tenant_id = %d", $account_id, $tenant_id));
+    if (!$exists) return new WP_REST_Response(['status' => 'error', 'message' => '找不到這個帳戶。'], 404);
+
+    $updated = $wpdb->update($table_accounts, ['status' => 'active'], ['id' => $account_id, 'tenant_id' => $tenant_id], ['%s'], ['%d', '%d']);
+    if ($updated === false) return new WP_REST_Response(['status' => 'error', 'message' => '啟用帳戶失敗。'], 500);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '帳戶已重新啟用'], 200);
+}
+
+function zzscs_api_transfer_create(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $user_id   = get_current_user_id();
+
+    $date         = sanitize_text_field($request->get_param('date'));
+    $from_account = sanitize_text_field($request->get_param('from_account'));
+    $to_account   = sanitize_text_field($request->get_param('to_account'));
+    $amount       = floatval($request->get_param('amount'));
+    $note         = sanitize_textarea_field($request->get_param('note'));
+
+    if (empty($date)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫轉帳日期。'], 400);
+    if (empty($from_account)) return new WP_REST_Response(['status' => 'error', 'message' => '請選擇轉出帳戶。'], 400);
+    if (empty($to_account)) return new WP_REST_Response(['status' => 'error', 'message' => '請選擇轉入帳戶。'], 400);
+    if ($from_account === $to_account) return new WP_REST_Response(['status' => 'error', 'message' => '轉出帳戶與轉入帳戶不可相同。'], 400);
+    if ($amount <= 0) return new WP_REST_Response(['status' => 'error', 'message' => '轉帳金額必須大於0。'], 400);
+
+    $table_accounts = $wpdb->prefix . 'zz_cash_accounts';
+    $table_entries  = $wpdb->prefix . 'zz_cash_entries';
+
+    $from_row = $wpdb->get_row($wpdb->prepare("SELECT id FROM {$table_accounts} WHERE tenant_id = %d AND account_name = %s AND status = 'active' LIMIT 1", $tenant_id, $from_account));
+    if (!$from_row) return new WP_REST_Response(['status' => 'error', 'message' => '找不到轉出帳戶，或帳戶已停用。'], 404);
+
+    $to_row = $wpdb->get_row($wpdb->prepare("SELECT id FROM {$table_accounts} WHERE tenant_id = %d AND account_name = %s AND status = 'active' LIMIT 1", $tenant_id, $to_account));
+    if (!$to_row) return new WP_REST_Response(['status' => 'error', 'message' => '找不到轉入帳戶，或帳戶已停用。'], 404);
+
+    $transfer_code = 'TRF' . date('YmdHis') . wp_rand(100, 999);
+    $created_at    = current_time('mysql');
+    $memo = '帳戶轉帳';
+
+    $wpdb->query('START TRANSACTION');
+
+    $result1 = $wpdb->insert($table_entries, [
+        'tenant_id' => $tenant_id, 'entry_date' => $date, 'memo' => $memo, 'category' => '帳戶轉帳', 
+        'account_id' => absint($from_row->id), 'income' => 0, 'expense' => $amount, 'note' => $note, 
+        'transfer_code' => $transfer_code, 'created_by' => $user_id, 'created_at' => $created_at
+    ], ['%d', '%s', '%s', '%s', '%d', '%f', '%f', '%s', '%s', '%d', '%s']);
+    
+    $result2 = $wpdb->insert($table_entries, [
+        'tenant_id' => $tenant_id, 'entry_date' => $date, 'memo' => $memo, 'category' => '帳戶轉帳', 
+        'account_id' => absint($to_row->id), 'income' => $amount, 'expense' => 0, 'note' => $note, 
+        'transfer_code' => $transfer_code, 'created_by' => $user_id, 'created_at' => $created_at
+    ], ['%d', '%s', '%s', '%s', '%d', '%f', '%f', '%s', '%s', '%d', '%s']);
+
+    if ($result1 === false || $result2 === false) {
+        $wpdb->query('ROLLBACK');
+        return new WP_REST_Response(['status' => 'error', 'message' => '建立轉帳資料失敗，已還原。'], 500);
+    } else {
+        $wpdb->query('COMMIT');
+        return new WP_REST_Response(['status' => 'ok', 'message' => '轉帳成功', 'transfer_code' => $transfer_code], 200);
+    }
+}
+
+function zzscs_api_get_categories() {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $table_categories = $wpdb->prefix . 'zz_cash_categories';
+    
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT category_name AS name, category_type AS type FROM {$table_categories} WHERE tenant_id = %d AND status = 'active' ORDER BY category_name ASC", $tenant_id), ARRAY_A);
+    return new WP_REST_Response(['status' => 'ok', 'data' => $rows], 200);
+}
+
+function zzscs_api_category_list() {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $table_categories = $wpdb->prefix . 'zz_cash_categories';
+
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT id, category_name, category_type, status, created_at FROM {$table_categories} WHERE tenant_id = %d ORDER BY status DESC, category_type ASC, category_name ASC", $tenant_id), ARRAY_A);
+    if (!is_array($rows)) $rows = [];
+    foreach ($rows as &$row) { $row['id'] = absint($row['id']); }
+    return new WP_REST_Response(['status' => 'ok', 'data' => $rows], 200);
+}
+
+function zzscs_api_category_create(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $category_name = sanitize_text_field($request->get_param('category_name'));
+    $category_type = sanitize_text_field($request->get_param('category_type'));
+    if (empty($category_name)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫科目名稱。'], 400);
+    if (!in_array($category_type, ['income', 'expense'])) $category_type = 'expense';
+    
+    $table_categories = $wpdb->prefix . 'zz_cash_categories';
+    
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_categories} WHERE tenant_id = %d AND category_name = %s AND category_type = %s", $tenant_id, $category_name, $category_type));
+    if ($exists) return new WP_REST_Response(['status' => 'error', 'message' => '此科目名稱已存在於該類型中。'], 400);
+    
+    $inserted = $wpdb->insert($table_categories, ['tenant_id' => $tenant_id, 'category_name' => $category_name, 'category_type' => $category_type, 'status' => 'active', 'created_at' => current_time('mysql')], ['%d', '%s', '%s', '%s', '%s']);
+    
+    if ($inserted === false) return new WP_REST_Response(['status' => 'error', 'message' => '新增科目失敗。'], 500);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '科目新增成功', 'id' => absint($wpdb->insert_id)], 200);
+}
+
+function zzscs_api_category_update(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $category_id = absint($request->get_param('category_id'));
+    $category_name = sanitize_text_field($request->get_param('category_name'));
+    $category_type = sanitize_text_field($request->get_param('category_type'));
+
+    if ($category_id <= 0) return new WP_REST_Response(['status' => 'error', 'message' => 'category_id 不正確。'], 400);
+    if (empty($category_name)) return new WP_REST_Response(['status' => 'error', 'message' => '請填寫科目名稱。'], 400);
+    if (!in_array($category_type, ['income', 'expense'])) $category_type = 'expense';
+
+    $table_categories = $wpdb->prefix . 'zz_cash_categories';
+    
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_categories} WHERE id = %d AND tenant_id = %d", $category_id, $tenant_id));
+    if (!$exists) return new WP_REST_Response(['status' => 'error', 'message' => '找不到這個科目，或無權限修改。'], 404);
+
+    $duplicate = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_categories} WHERE tenant_id = %d AND category_name = %s AND category_type = %s AND id <> %d", $tenant_id, $category_name, $category_type, $category_id));
+    if ($duplicate) return new WP_REST_Response(['status' => 'error', 'message' => '此科目名稱已存在於該類型中。'], 400);
+
+    $updated = $wpdb->update($table_categories, ['category_name' => $category_name, 'category_type' => $category_type], ['id' => $category_id, 'tenant_id' => $tenant_id], ['%s', '%s'], ['%d', '%d']);
+    
+    if ($updated === false) return new WP_REST_Response(['status' => 'error', 'message' => '更新科目失敗。'], 500);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '科目更新成功'], 200);
+}
+
+function zzscs_api_category_disable(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $category_id = absint($request->get_param('category_id'));
+    if ($category_id <= 0) return new WP_REST_Response(['status' => 'error', 'message' => 'category_id 不正確。'], 400);
+
+    $table_categories = $wpdb->prefix . 'zz_cash_categories';
+
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_categories} WHERE id = %d AND tenant_id = %d", $category_id, $tenant_id));
+    if (!$exists) return new WP_REST_Response(['status' => 'error', 'message' => '找不到這個科目。'], 404);
+
+    $updated = $wpdb->update($table_categories, ['status' => 'inactive'], ['id' => $category_id, 'tenant_id' => $tenant_id], ['%s'], ['%d', '%d']);
+    if ($updated === false) return new WP_REST_Response(['status' => 'error', 'message' => '停用科目失敗。'], 500);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '科目已停用'], 200);
+}
+
+function zzscs_api_category_enable(WP_REST_Request $request) {
+    global $wpdb;
+    $tenant_id = zzscs_get_current_tenant_id();
+    $category_id = absint($request->get_param('category_id'));
+    if ($category_id <= 0) return new WP_REST_Response(['status' => 'error', 'message' => 'category_id 不正確。'], 400);
+
+    $table_categories = $wpdb->prefix . 'zz_cash_categories';
+
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_categories} WHERE id = %d AND tenant_id = %d", $category_id, $tenant_id));
+    if (!$exists) return new WP_REST_Response(['status' => 'error', 'message' => '找不到這個科目。'], 404);
+
+    $updated = $wpdb->update($table_categories, ['status' => 'active'], ['id' => $category_id, 'tenant_id' => $tenant_id], ['%s'], ['%d', '%d']);
+    if ($updated === false) return new WP_REST_Response(['status' => 'error', 'message' => '啟用科目失敗。'], 500);
+
+    return new WP_REST_Response(['status' => 'ok', 'message' => '科目已重新啟用'], 200);
+}
+
+================================================================
+檔案路徑：includes/install.php
+================================================================
+<?php
+// install.php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+function zzscs_install() {
+    // 🔴 效能優化：加入靜態防護，確保在同一次請求中 (例如啟用外掛時) 不會重複跑兩次 ALTER TABLE
+    static $has_run = false;
+    if ($has_run) {
+        return;
+    }
+    $has_run = true;
+
+    global $wpdb;
+
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $table_tenants         = $wpdb->prefix . 'zz_tenants';
+    $table_tenant_users    = $wpdb->prefix . 'zz_tenant_users';
+    $table_cash_accounts   = $wpdb->prefix . 'zz_cash_accounts';
+    $table_cash_entries    = $wpdb->prefix . 'zz_cash_entries';
+    $table_cash_categories = $wpdb->prefix . 'zz_cash_categories';
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+    $sql_tenants = "CREATE TABLE {$table_tenants} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        company_name VARCHAR(200) NOT NULL DEFAULT '',
+        owner_user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        plan_code VARCHAR(50) NOT NULL DEFAULT '',
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        KEY owner_user_id (owner_user_id),
+        KEY status (status)
+    ) ENGINE=InnoDB {$charset_collate};";
+
+    $sql_tenant_users = "CREATE TABLE {$table_tenant_users} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        tenant_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        tenant_role VARCHAR(30) NOT NULL DEFAULT 'owner',
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        KEY tenant_id (tenant_id),
+        KEY user_id (user_id),
+        KEY status (status)
+    ) ENGINE=InnoDB {$charset_collate};";
+
+    $sql_cash_accounts = "CREATE TABLE {$table_cash_accounts} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        tenant_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        account_name VARCHAR(100) NOT NULL DEFAULT '',
+        account_type VARCHAR(50) NOT NULL DEFAULT 'cash',
+        opening_balance DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        KEY tenant_id (tenant_id),
+        KEY status (status)
+    ) ENGINE=InnoDB {$charset_collate};";
+
+    $sql_cash_entries = "CREATE TABLE {$table_cash_entries} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        tenant_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        entry_date DATE NOT NULL,
+        memo VARCHAR(200) NOT NULL DEFAULT '',
+        category VARCHAR(100) NOT NULL DEFAULT '',
+        account_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        income DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        expense DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        note TEXT NULL,
+        transfer_code varchar(50) NOT NULL DEFAULT '',
+        created_by BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        KEY tenant_id (tenant_id),
+        KEY entry_date (entry_date),
+        KEY account_id (account_id),
+        KEY created_by (created_by)
+    ) ENGINE=InnoDB {$charset_collate};";
+
+    $sql_cash_categories = "CREATE TABLE {$table_cash_categories} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        tenant_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        category_name VARCHAR(100) NOT NULL DEFAULT '',
+        category_type VARCHAR(20) NOT NULL DEFAULT 'expense',
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY  (id),
+        KEY tenant_id (tenant_id),
+        KEY category_type (category_type),
+        KEY status (status)
+    ) ENGINE=InnoDB {$charset_collate};";
+
+    dbDelta($sql_tenants);
+    dbDelta($sql_tenant_users);
+    dbDelta($sql_cash_accounts);
+    dbDelta($sql_cash_entries);
+    dbDelta($sql_cash_categories);
+
+    $tables_to_upgrade = [
+        $table_tenants,
+        $table_tenant_users,
+        $table_cash_accounts,
+        $table_cash_entries,
+        $table_cash_categories
+    ];
+    foreach ($tables_to_upgrade as $table) {
+        $wpdb->query("ALTER TABLE {$table} ENGINE=InnoDB;");
+    }
+
+    update_option('zzscs_version', ZZSCS_VERSION);
+}
+
+================================================================
+檔案路徑：includes/my-account.php
+================================================================
+<?php
+// my-account.php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+function zzscs_add_my_account_endpoint() {
+    add_rewrite_endpoint('cashbook', EP_ROOT | EP_PAGES);
+}
+add_action('init', 'zzscs_add_my_account_endpoint');
+
+function zzscs_add_my_account_menu_item($items) {
+    $new_items = [];
+
+    foreach ($items as $key => $label) {
+        $new_items[$key] = $label;
+
+        if ($key === 'dashboard') {
+            $new_items['cashbook'] = '我的記帳系統';
+        }
+    }
+
+    return $new_items;
+}
+add_filter('woocommerce_account_menu_items', 'zzscs_add_my_account_menu_item');
+
+function zzscs_render_my_account_cashbook() {
+    echo do_shortcode('[zanzan_cashbook]');
+}
+add_action('woocommerce_account_cashbook_endpoint', 'zzscs_render_my_account_cashbook');
+
+function zzscs_flush_rewrite_for_my_account() {
+    zzscs_add_my_account_endpoint();
+    flush_rewrite_rules();
+}
+
+================================================================
+檔案路徑：includes/tenant.php
+================================================================
+<?php
+// tenant.php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+function zzscs_get_current_tenant_id() {
+    $user_id = get_current_user_id();
+
+    if (!$user_id) {
+        return 0;
+    }
+
+    $tenant_id = get_user_meta($user_id, 'zz_default_tenant_id', true);
+
+    return absint($tenant_id);
+}
+
+function zzscs_current_user_has_tenant() {
+    return zzscs_get_current_tenant_id() > 0;
+}
+
+================================================================
+檔案路徑：includes/woocommerce-hooks.php
+================================================================
+<?php
+// woocommerce-hooks.php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+// 當訂單狀態變更為 processing 或 completed 時，觸發檢查
+add_action('woocommerce_order_status_processing', 'zzscs_auto_create_tenant_on_purchase', 10, 1);
+add_action('woocommerce_order_status_completed', 'zzscs_auto_create_tenant_on_purchase', 10, 1);
+
+function zzscs_auto_create_tenant_on_purchase($order_id) {
+    $order = wc_get_order($order_id);
+    
+    // 🔴 優化一：加入嚴格的 Order 物件型別檢查
+    if (!$order || !is_a($order, 'WC_Order')) {
+        return;
+    }
+
+    // 1. 為了避免重複執行，檢查是否已經成功建立過 (yes) 或已存在 (exists)
+    $meta_status = $order->get_meta('_zzscs_tenant_created');
+    if (in_array($meta_status, ['yes', 'exists'], true)) {
+        return;
+    }
+
+    $user_id = $order->get_user_id();
+    if (!$user_id) return; // 訪客購買不處理
+
+    // 2. 取得我們定義的專屬商品 ID，並轉為整數
+    $required_product_id = (int) (defined('ZZSCS_REQUIRED_PRODUCT_ID') ? ZZSCS_REQUIRED_PRODUCT_ID : 68568);
+    $has_subscription = false;
+
+    // 🔴 優化二：商品 ID 嚴格轉型與比對 (===)
+    foreach ($order->get_items() as $item) {
+        $product_id   = (int) $item->get_product_id();
+        $variation_id = (int) $item->get_variation_id();
+        
+        if ($product_id === $required_product_id || $variation_id === $required_product_id) {
+            $has_subscription = true;
+            break;
+        }
+    }
+
+    // 3. 非記帳訂單直接「靜默離開」，保持後台乾淨
+    if (!$has_subscription) {
+        return;
+    }
+
+    // 接下來是確認購買記帳方案的流程
+    global $wpdb;
+    
+    $table_tenants         = $wpdb->prefix . 'zz_tenants';
+    $table_tenant_users    = $wpdb->prefix . 'zz_tenant_users';
+    $table_cash_accounts   = $wpdb->prefix . 'zz_cash_accounts';
+    $table_cash_categories = $wpdb->prefix . 'zz_cash_categories';
+
+    // 4. 檢查客戶是否已有公司帳本 (同時補回遺失的 Meta)
+    $existing_tenant_id = get_user_meta($user_id, 'zz_default_tenant_id', true);
+
+    if (empty($existing_tenant_id)) {
+        $existing_tenant_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$table_tenants} WHERE owner_user_id = %d AND status = 'active' ORDER BY id ASC LIMIT 1",
+            $user_id
+        ));
+    }
+
+    if (!empty($existing_tenant_id)) {
+        update_user_meta($user_id, 'zz_default_tenant_id', $existing_tenant_id);
+        // 保險起見，舊客戶也一併刷新狀態
+        update_user_meta($user_id, 'zz_saas_plan', 'simple-cash-saas');
+        update_user_meta($user_id, 'zz_saas_status', 'active');
+        
+        $order->add_order_note('贊贊記帳：客戶已擁有公司帳本，略過自動建立。tenant_id=' . $existing_tenant_id);
+        $order->update_meta_data('_zzscs_tenant_created', 'exists');
+        $order->save();
+        return;
+    }
+
+    // 5. 動態產生友善的帳本名稱
+    $billing_company   = sanitize_text_field(trim($order->get_billing_company()));
+    $billing_lastname  = sanitize_text_field(trim($order->get_billing_last_name()));
+    $billing_firstname = sanitize_text_field(trim($order->get_billing_first_name()));
+    $full_name         = trim($billing_lastname . $billing_firstname);
+
+    if (!empty($billing_company)) {
+        $company_name = $billing_company;
+    } elseif (!empty($full_name)) {
+        $company_name = $full_name . '的帳本';
+    } else {
+        $company_name = '我的記帳本';
+    }
+
+    $created_at = current_time('mysql');
+
+    // ==========================================
+    // 6. 開始資料庫寫入交易 (Transaction)
+    // ==========================================
+    $wpdb->query('START TRANSACTION');
+
+    $insert_tenant = $wpdb->insert($table_tenants, [
+        'company_name'  => $company_name,
+        'owner_user_id' => $user_id,
+        'plan_code'     => 'simple-cash-saas',
+        'status'        => 'active',
+        'created_at'    => $created_at
+    ], ['%s', '%d', '%s', '%s', '%s']);
+
+    if ($insert_tenant === false) {
+        $wpdb->query('ROLLBACK');
+        $order->add_order_note('贊贊記帳：自動建立公司失敗 (DB Insert Error)。');
+        return;
+    }
+
+    $tenant_id = absint($wpdb->insert_id);
+
+    // 寫入預設關聯資料
+    $i_user = $wpdb->insert($table_tenant_users, ['tenant_id' => $tenant_id, 'user_id' => $user_id, 'tenant_role' => 'owner', 'status' => 'active', 'created_at' => $created_at], ['%d', '%d', '%s', '%s', '%s']);
+    $i_acc  = $wpdb->insert($table_cash_accounts, ['tenant_id' => $tenant_id, 'account_name' => '現金', 'account_type' => 'cash', 'opening_balance' => 0, 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%f', '%s', '%s']);
+    
+    $i_c1 = $wpdb->insert($table_cash_categories, ['tenant_id' => $tenant_id, 'category_name' => '餐費', 'category_type' => 'expense', 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%s', '%s']);
+    $i_c2 = $wpdb->insert($table_cash_categories, ['tenant_id' => $tenant_id, 'category_name' => '交通', 'category_type' => 'expense', 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%s', '%s']);
+    $i_c3 = $wpdb->insert($table_cash_categories, ['tenant_id' => $tenant_id, 'category_name' => '住宿', 'category_type' => 'expense', 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%s', '%s']);
+    $i_c4 = $wpdb->insert($table_cash_categories, ['tenant_id' => $tenant_id, 'category_name' => '一般收入', 'category_type' => 'income', 'status' => 'active', 'created_at' => $created_at], ['%d', '%s', '%s', '%s', '%s']);
+
+    // 🔴 修正：拿掉多餘的 DELETE，信任 ROLLBACK 機制
+    if ($i_user === false || $i_acc === false || $i_c1 === false || $i_c2 === false || $i_c3 === false || $i_c4 === false) {
+        $wpdb->query('ROLLBACK');
+        $order->add_order_note('贊贊記帳：初始化公司預設資料失敗，已還原。');
+        return;
+    }
+
+    $wpdb->query('COMMIT');
+    
+    // 🔴 優化三：寫入完整的 User Meta，方便未來營運管理
+    update_user_meta($user_id, 'zz_default_tenant_id', $tenant_id);
+    update_user_meta($user_id, 'zz_saas_plan', 'simple-cash-saas');
+    update_user_meta($user_id, 'zz_saas_status', 'active');
+
+    // 標記為已建立 (yes)，防重複執行
+    $order->update_meta_data('_zzscs_tenant_created', 'yes');
+    $order->save();
+
+    // 留存備註方便客服追蹤
+    $order->add_order_note("贊贊記帳：已自動為客戶建立預設帳本 (Tenant ID: {$tenant_id}，名稱：{$company_name})。");
+}
+
+================================================================
+檔案路徑：zanzan-simple-cash-saas.php
+================================================================
+<?php
+/**
+ * Plugin Name: Zanzan Simple Cash SaaS
+ * Plugin URI: https://zanzan.tw/
+ * Description: 贊贊小屋專屬「贊贊記帳」雲端系統
+ * Version: 1.8.33
+ * Author: 贊贊小屋
+ * Author URI: https://zanzan.tw/
+ * Text Domain: zanzan-simple-cash-saas
+ * Update Focus: v1.8.33 訂單備註取消v4
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+define('ZZSCS_VERSION', '1.8.33');
+define('ZZSCS_FILE', __FILE__);
+define('ZZSCS_PATH', plugin_dir_path(__FILE__));
+define('ZZSCS_URL', plugin_dir_url(__FILE__));
+
+define('ZZSCS_REQUIRED_PRODUCT_ID', 68568);
+define('ZZSCS_SUBSCRIBE_URL_PATH', '/product/cash/');
+
+require_once ZZSCS_PATH . 'includes/install.php';
+require_once ZZSCS_PATH . 'includes/tenant.php';
+require_once ZZSCS_PATH . 'includes/api.php';
+require_once ZZSCS_PATH . 'includes/woocommerce-hooks.php';
+require_once ZZSCS_PATH . 'includes/my-account.php';
+require_once ZZSCS_PATH . 'public/shortcode-cashbook.php';
+
+// 🔴 自動升級機制
+add_action('plugins_loaded', 'zzscs_update_db_check');
+function zzscs_update_db_check() {
+    $current_version = get_option('zzscs_version', '0.0.0');
+    if (version_compare($current_version, ZZSCS_VERSION, '<')) {
+        zzscs_install();
+    }
+}
+
+// 🔴 關鍵修復：將 CSS 提早到網站的 <head> 載入，徹底消滅載入閃爍 (FOUC)
+add_action('wp_enqueue_scripts', 'zzscs_enqueue_global_assets');
+function zzscs_enqueue_global_assets() {
+    global $post;
+    // 只有在包含記帳系統 Shortcode 的頁面，才提早載入這包 CSS，兼顧效能與美觀
+    if (is_a($post, 'WP_Post') && has_shortcode($post->post_content, 'zanzan_cashbook')) {
+        wp_enqueue_style('zzscs-cashbook-css', ZZSCS_URL . 'assets/css/cashbook.css', [], ZZSCS_VERSION);
+    }
+}
+
+function zzscs_activate_plugin() {
+    zzscs_install();
+    if (function_exists('zzscs_flush_rewrite_for_my_account')) {
+        zzscs_flush_rewrite_for_my_account();
+    }
+}
+register_activation_hook(__FILE__, 'zzscs_activate_plugin');
+
+function zzscs_deactivate_plugin() {
+    flush_rewrite_rules();
+}
+register_deactivation_hook(__FILE__, 'zzscs_deactivate_plugin');
+
+================================================================
+檔案路徑：assets/css/cashbook.css
+================================================================
+/* cashbook.css */
+
+/* ==========================================
+   1. 基礎外框與標題 (包含付費牆)
+========================================== */
+.zzscs-wrap, .zzscs-paywall-wrap { width: 100%; max-width: 1000px !important; margin: 40px auto; padding: 24px; background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; box-sizing: border-box; position: relative; font-family: sans-serif; }
+
+.zzscs-wrap h2, .zzscs-paywall-wrap h2 { border: none !important; background: transparent !important; padding: 0 !important; margin: 0 0 20px 0 !important; text-align: center !important; font-size: 2.2rem !important; font-weight: 700 !important; color: #1a202c !important; letter-spacing: 0.05em; scroll-margin-top: 160px; box-shadow: none !important; }
+
+.zzscs-wrap h3 { border: none !important; background: transparent !important; margin: 0 0 15px 0 !important; padding-bottom: 12px !important; font-size: 1.35rem !important; font-weight: 600 !important; color: #2d3748 !important; border-bottom: 2px solid #edf2f7 !important; text-align: left !important; line-height: 1.4 !important; scroll-margin-top: 160px; }
+
+.zzscs-paywall-wrap { max-width: 800px !important; text-align: center; padding: 60px 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
+.zzscs-paywall-wrap p { font-size: 16px; color: #4b5563; margin-bottom: 28px; line-height: 1.6; }
+.zzscs-paywall-wrap a { display: inline-block !important; background: #2563eb !important; color: #ffffff !important; padding: 12px 28px !important; border-radius: 8px !important; text-decoration: none !important; font-weight: 600 !important; font-size: 16px !important; transition: background 0.2s !important; border: none !important; }
+.zzscs-paywall-wrap a:hover { background: #1d4ed8 !important; color: #ffffff !important; }
+
+/* ==========================================
+   2. 導覽列
+========================================== */
+.zzscs-nav { position: sticky !important; top: 100px !important; z-index: 100 !important; background: rgba(255,255,255,0.95) !important; backdrop-filter: blur(8px); padding: 16px 4px !important; margin-bottom: 24px; border-bottom: 1px solid #e5e7eb; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; overflow-y: hidden !important; }
+.zzscs-nav a { display: inline-block !important; text-decoration: none !important; color: #475569 !important; background: #f1f5f9 !important; font-weight: 600 !important; padding: 8px 16px !important; border-radius: 8px !important; border: 1px solid #e2e8f0 !important; transition: all 0.2s; font-size: 14px !important; line-height: 1.5 !important; box-sizing: border-box; }
+.zzscs-nav a:hover { background: #e2e8f0 !important; color: #0f172a !important; }
+.zzscs-nav a.active { background: #2563eb !important; color: #ffffff !important; border-color: #2563eb !important; }
+
+/* ==========================================
+   3. 表單排版與輸入框
+========================================== */
+.zzscs-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 20px 16px; }
+.zzscs-grid > div { display: flex; flex-direction: column; gap: 8px; }
+
+.zzscs-form label, .zzscs-create-tenant-box label, .zzscs-transfer-form label, .zzscs-account-manage-form label { display:block !important; margin: 0 !important; font-weight:600 !important; color: #374151 !important; line-height: 1.2 !important;}
+.zzscs-form input, .zzscs-form textarea, .zzscs-form select, .zzscs-transfer-form input, .zzscs-transfer-form select, .zzscs-account-manage-form input, .zzscs-account-manage-form select { display: block !important; width:100% !important; padding:10px 14px !important; border:1px solid #d1d5db !important; border-radius:8px !important; box-sizing:border-box !important; font-size:16px !important; background:#fff !important; margin: 0 !important; color: #111827 !important; min-height: 44px !important; }
+
+.zzscs-note { margin-top:20px; display: flex; flex-direction: column; gap: 8px; }
+
+.zzscs-tenant-row { margin: 0 0 24px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.zzscs-tenant-row label { font-weight:700; color:#111827; margin:0; font-size: 16px; }
+#zz-tenant-switch { min-width:240px; max-width:100%; padding:10px 14px !important; border:1px solid #d1d5db !important; border-radius:8px !important; background:#fff !important; font-size:16px !important; font-family: inherit !important; color:#111827 !important; box-sizing:border-box; height: 44px !important; line-height: 1.2 !important; }
+#zz-tenant-switch:focus, #zz-new-tenant-name:focus { outline:none; border-color:#2563eb !important; box-shadow:0 0 0 3px rgba(37,99,235,.1) !important; }
+
+/* ==========================================
+   4. 按鈕樣式
+========================================== */
+.zzscs-actions { margin-top:20px; display:flex; gap:12px; flex-wrap:wrap; }
+.zzscs-actions button { padding:10px 18px; border:none; border-radius:8px; cursor:pointer; font-size:15px; transition: background 0.2s; font-weight: 600; }
+.zzscs-actions button:disabled { opacity:.6; cursor:not-allowed; }
+
+#zz-submit { background: #2563eb !important; color: #fff !important; }
+#zz-submit:hover { background: #1d4ed8 !important; }
+.zzscs-small-btn.primary { background: #2563eb !important; color: #fff !important; }
+/* 🔴 修復：確保 primary 按鈕 hover 時字體依然是白色 */
+.zzscs-small-btn.primary:hover { background: #1d4ed8 !important; color: #ffffff !important; }
+
+#zz-refresh.secondary, #zz-cancel-edit.secondary, .zzscs-small-btn { background: #f1f5f9 !important; color: #475569 !important; border: 1px solid #cbd5e1 !important; display:inline-flex; align-items:center; justify-content:center; padding:10px 14px; border-radius:8px; cursor:pointer; font-size:14px; font-weight: 600; transition: all 0.2s; }
+#zz-refresh.secondary:hover, #zz-cancel-edit.secondary:hover, .zzscs-small-btn:hover { background: #e2e8f0 !important; color: #0f172a !important; }
+
+.zzscs-small-btn.export-btn, #zz-export-csv { background:#10b981 !important; color:#fff !important; border: none !important; }
+.zzscs-small-btn.export-btn:hover, #zz-export-csv:hover { background:#059669 !important; }
+
+.zz-entry-delete, .zz-delete { background:#ef4444; color:#fff; border:none; padding:6px 10px; border-radius:6px; cursor:pointer; transition: opacity 0.2s; font-size: 13px; white-space: nowrap; font-weight: 500; }
+.zz-entry-edit, .zz-edit { background:#3b82f6; color:#fff; border:none; padding:6px 10px; border-radius:6px; margin-right:5px; cursor:pointer; transition: opacity 0.2s; font-size: 13px; white-space: nowrap; font-weight: 500; }
+.zz-entry-edit:hover, .zz-entry-delete:hover, .zz-edit:hover, .zz-delete:hover { opacity:.85; }
+
+.zz-account-enable, .zz-category-enable { background:#10b981; color:#fff; border:none; padding:6px 10px; border-radius:6px; cursor:pointer; font-size: 13px; font-weight: 500; }
+.zz-account-enable:hover, .zz-category-enable:hover { opacity:.85; }
+.zz-account-disable, .zz-account-edit { background:#3b82f6; color:#fff; border:none; padding:6px 10px; border-radius:6px; cursor:pointer; font-size: 13px; font-weight: 500; }
+.zz-account-disable { background:#ef4444; margin-left:6px; }
+.zz-account-disable:hover, .zz-account-edit:hover { opacity:.85; }
+
+/* ==========================================
+   5. 資訊卡片與版塊
+========================================== */
+#zz-msg, #zz-transfer-msg, #zz-account-msg, #zz-account-table-msg, #zz-category-msg, #zz-category-table-msg { margin-top:12px; font-size:14px; min-height:24px; font-weight: 500; }
+#zz-loading { margin-top:4px; color:#374151; font-size:14px; }
+
+.zzscs-summary, .zzscs-account-summary, .zzscs-transfer-box, .zzscs-account-manage, .zzscs-list { scroll-margin-top: 160px; margin-top:32px; }
+.zzscs-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.zzscs-card { padding:18px; border:1px solid #e5e7eb; border-radius:12px; background:#f9fafb; }
+.zzscs-card-title { font-size:14px; color:#6b7280; margin-bottom:8px; display: flex; flex-direction: column; font-weight: 600; }
+.zzscs-card-title small { font-size: 11px; color: #9ca3af; margin-top: 2px; font-weight: normal; }
+.zzscs-card-value { font-size:28px; font-weight:700; word-break:break-word; color:#111827; }
+
+.zzscs-account-summary-list { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.zzscs-account-card { padding:18px; border:1px solid #e5e7eb; border-radius:12px; background:#f9fafb; }
+.zzscs-account-card-name { font-size:18px; font-weight:700; margin-bottom:10px; color:#111827; }
+.zzscs-account-card-row { font-size:14px; color:#4b5563; margin-bottom:6px; }
+.zzscs-account-card-balance { margin-top:10px; font-size:20px; font-weight:700; color:#111827; }
+.zzscs-account-summary-empty { padding:16px; border:1px solid #e5e7eb; border-radius:12px; background:#f9fafb; color:#6b7280; }
+
+.zzscs-transfer-form, .zzscs-account-manage-form { padding: 20px; border: 1px solid #e5e7eb; border-radius: 12px; background: #f9fafb; margin-bottom: 16px; }
+
+.zzscs-create-tenant-box { margin: 0 0 24px; padding:20px; border:1px solid #e5e7eb; border-radius:12px; background:#f9fafb; display: flex; flex-direction: column; gap: 8px;}
+#zz-new-tenant-name { width:100%; max-width:320px; padding:10px 14px !important; border:1px solid #d1d5db !important; border-radius:8px !important; box-sizing:border-box; font-size:16px !important; background:#fff !important; color:#111827 !important; min-height: 44px !important; }
+.zzscs-create-tenant-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top: 4px; }
+
+.zzscs-welcome-box { padding: 30px; background: #ecfdf5; border: 1px solid #10b981; border-radius: 12px; text-align: center; margin-bottom: 24px; }
+.zzscs-welcome-box h3 { color: #065f46 !important; margin-top: 0 !important; border:none !important; text-align:center !important;}
+.zzscs-welcome-box p { color: #047857; margin-bottom: 0; font-size: 16px; }
+
+/* ==========================================
+   6. 列表與表格
+========================================== */
+.zzscs-list, .zzscs-account-manage-table-wrap { overflow-x:auto; }
+.zzscs-list table, .zzscs-account-manage-table { width:100%; border-collapse:collapse; color: #374151; font-size: 14px; }
+.zzscs-list th, .zzscs-list td, .zzscs-account-manage-table th, .zzscs-account-manage-table td { border-bottom:1px solid #e5e7eb; padding:12px 10px; text-align:left; vertical-align:middle; line-height: 1.4; }
+.zzscs-list th, .zzscs-account-manage-table th { background:#f1f5f9; font-weight:700; white-space: nowrap; color: #1e293b; }
+.zz-transfer-badge { background:#e2e8f0; color:#475569; padding:3px 6px; border-radius:4px; font-size:11px; margin-left:6px; font-weight: normal; letter-spacing: 0.05em; }
+
+/* 🔴 篩選區塊修復：精緻化輸入框，強制單列排版更專業 */
+.zzscs-filter { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:16px; margin:0 0 16px; padding:20px; border:1px solid #e5e7eb; border-radius:12px; background:#f9fafb; align-items: end; }
+.zzscs-filter-item { display: flex; flex-direction: column; gap: 8px; }
+.zzscs-filter-item label { display:block !important; margin:0 !important; font-weight:600 !important; font-size:14px !important; color:#374151 !important; line-height: 1.2 !important; }
+.zzscs-filter-keyword { grid-column:span 2; }
+.zzscs-filter-actions { grid-column: 1 / -1; display:flex; justify-content: flex-end; gap:10px; flex-wrap:wrap; margin-top: 8px; }
+
+/* 🔴 針對篩選區的 Input 與 Select 強制縮小尺寸 */
+.zzscs-filter-item input, 
+.zzscs-filter-item select {
+    display: block !important;
+    width: 100% !important;
+    padding: 6px 10px !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 6px !important;
+    font-size: 14px !important; /* 縮小字體 */
+    color: #111827 !important;
+    min-height: 36px !important; /* 降低高度 */
+    background: #fff !important;
+    box-sizing: border-box !important;
+    margin: 0 !important;
+}
+
+/* ==========================================
+   7. RWD 響應式設計
+========================================== */
+@media (max-width: 1024px) {
+  .zzscs-grid { grid-template-columns: 1fr; } 
+  .zzscs-summary, .zzscs-account-summary-list { grid-template-columns: repeat(2, minmax(0,1fr)); } 
+}
+
+@media (max-width: 768px) {
+  .zzscs-summary, .zzscs-account-summary-list, .zzscs-filter { grid-template-columns: 1fr; }
+  .zzscs-filter-keyword { grid-column: span 1; }
+  .zzscs-filter-actions { justify-content: flex-start; margin-top: 4px; }
+  .zzscs-filter-actions button { flex: 1; text-align: center; }
+  .zzscs-nav { overflow-x: auto; white-space: nowrap; flex-wrap: nowrap; padding-bottom: 4px; }
+  .zzscs-list table, .zzscs-account-manage-table { min-width: 700px; } /* 手機版才需要橫向捲動 */
+}
+
+================================================================
+檔案路徑：assets/js/cashbook.js
+================================================================
+// cashbook.js
+(function () {
+  var cachedCategories = [];
+
+  function formatNumber(num) { return Number(num || 0).toLocaleString("zh-TW"); }
+  function escapeHtml(str) { return String(str == null ? "" : str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+
+  function showMsg(msg, isError) { var el = document.getElementById("zz-msg"); if (!el) return; el.textContent = msg || ""; el.style.color = isError ? "#ef4444" : "#10b981"; }
+  function showTransferMsg(msg, isError) { var el = document.getElementById("zz-transfer-msg"); if (!el) return; el.textContent = msg || ""; el.style.color = isError ? "#ef4444" : "#10b981"; }
+  function showAccountMsg(msg, isError) { var el = document.getElementById("zz-account-msg"); if (!el) return; el.textContent = msg || ""; el.style.color = isError ? "#ef4444" : "#10b981"; }
+  function showAccountTableMsg(msg, isError) { var el = document.getElementById("zz-account-table-msg"); if (!el) return; el.textContent = msg || ""; el.style.color = isError ? "#ef4444" : "#10b981"; }
+  function showCategoryMsg(msg, isError) { var el = document.getElementById("zz-category-msg"); if (!el) return; el.textContent = msg || ""; el.style.color = isError ? "#ef4444" : "#10b981"; }
+  function showCategoryTableMsg(msg, isError) { var el = document.getElementById("zz-category-table-msg"); if (!el) return; el.textContent = msg || ""; el.style.color = isError ? "#ef4444" : "#10b981"; }
+
+  function clearAllMsgs() {
+    showMsg("", false); showTransferMsg("", false); showAccountMsg("", false);
+    showAccountTableMsg("", false); showCategoryMsg("", false); showCategoryTableMsg("", false);
+  }
+
+  function setLoading(isLoading, text) {
+    var loadingEl = document.getElementById("zz-loading");
+    if (loadingEl) {
+      loadingEl.textContent = text || "處理中，請稍候...";
+      loadingEl.style.display = isLoading ? "block" : "none";
+    }
+    var buttons = ["zz-submit", "zz-refresh", "zz-create-tenant-btn", "zz-filter-btn", "zz-filter-clear", "zz-account-create", "zz-account-update", "zz-transfer-submit", "zz-transfer-clear", "zz-category-create", "zz-category-update"];
+    buttons.forEach(function(id) { var btn = document.getElementById(id); if (btn) btn.disabled = isLoading; });
+  }
+
+  function resetEditMode() {
+    var entryIdEl = document.getElementById("zz-entry-id");
+    var submitBtn = document.getElementById("zz-submit");
+    var cancelEditBtn = document.getElementById("zz-cancel-edit");
+    if (entryIdEl) entryIdEl.value = "";
+    if (submitBtn) submitBtn.textContent = "送出記帳";
+    if (cancelEditBtn) cancelEditBtn.style.display = "none";
+  }
+
+  function clearForm() {
+    document.getElementById("zz-memo").value = "";
+    document.getElementById("zz-category").value = "";
+    document.getElementById("zz-amount").value = 0; 
+    document.getElementById("zz-type").value = "expense"; 
+    var accountEl = document.getElementById("zz-account");
+    if (accountEl) accountEl.value = "";
+    document.getElementById("zz-note").value = "";
+    updateCategoryList(); 
+    resetEditMode();
+  }
+
+  function clearTransferForm() {
+    var dateEl = document.getElementById("zz-transfer-date");
+    var amountEl = document.getElementById("zz-transfer-amount");
+    var fromEl = document.getElementById("zz-transfer-from");
+    var toEl = document.getElementById("zz-transfer-to");
+    var noteEl = document.getElementById("zz-transfer-note");
+
+    if (amountEl) amountEl.value = 0;
+    if (fromEl) fromEl.value = "";
+    if (toEl) toEl.value = "";
+    if (noteEl) noteEl.value = "";
+
+    if (dateEl) {
+      var localNow = new Date();
+      var year = localNow.getFullYear();
+      var month = String(localNow.getMonth() + 1).padStart(2, "0");
+      var day = String(localNow.getDate()).padStart(2, "0");
+      dateEl.value = year + "-" + month + "-" + day;
+    }
+  }
+
+  function setEditMode(item) {
+    var entryIdEl = document.getElementById("zz-entry-id");
+    var submitBtn = document.getElementById("zz-submit");
+    var cancelEditBtn = document.getElementById("zz-cancel-edit");
+
+    document.getElementById("zz-date").value = item.entry_date || "";
+    document.getElementById("zz-memo").value = item.memo || "";
+    document.getElementById("zz-account").value = item.account || "";
+    document.getElementById("zz-note").value = item.note || "";
+
+    var income = parseFloat(item.income) || 0;
+    var expense = parseFloat(item.expense) || 0;
+    if (income > 0) { document.getElementById("zz-type").value = "income"; document.getElementById("zz-amount").value = income; } 
+    else { document.getElementById("zz-type").value = "expense"; document.getElementById("zz-amount").value = expense; }
+    
+    updateCategoryList();
+    document.getElementById("zz-category").value = item.category || "";
+
+    if (entryIdEl) entryIdEl.value = item.id || "";
+    if (submitBtn) submitBtn.textContent = "更新記帳";
+    if (cancelEditBtn) cancelEditBtn.style.display = "inline-flex";
+
+    var formEl = document.querySelector(".zzscs-form");
+    if (formEl) window.scrollTo({ top: formEl.offsetTop - 160, behavior: "smooth" });
+    clearAllMsgs(); showMsg("已進入編輯模式", false);
+  }
+
+  function updateCategoryList() {
+    var typeEl = document.getElementById("zz-type");
+    var listEl = document.getElementById("zz-category-list");
+    if (!typeEl || !listEl || !cachedCategories.length) return;
+    var currentType = typeEl.value; 
+    var filtered = cachedCategories.filter(function(c) { return c.type === currentType; });
+    listEl.innerHTML = filtered.map(function (c) { return '<option value="' + escapeHtml(c.name) + '"></option>'; }).join("");
+  }
+
+  function getFilters() {
+    return {
+      start_date: document.getElementById("zz-filter-start") ? document.getElementById("zz-filter-start").value : "",
+      end_date: document.getElementById("zz-filter-end") ? document.getElementById("zz-filter-end").value : "",
+      keyword: document.getElementById("zz-filter-keyword") ? document.getElementById("zz-filter-keyword").value.trim() : "",
+      limit: document.getElementById("zz-filter-limit") ? document.getElementById("zz-filter-limit").value : "10",
+      order: document.getElementById("zz-filter-order") ? document.getElementById("zz-filter-order").value : "desc"
+    };
+  }
+
+  function buildListUrl() {
+    var filters = getFilters();
+    var params = new URLSearchParams();
+    if (filters.start_date) params.append("start_date", filters.start_date);
+    if (filters.end_date) params.append("end_date", filters.end_date);
+    if (filters.keyword) params.append("keyword", filters.keyword);
+    if (filters.limit) params.append("limit", filters.limit);
+    if (filters.order) params.append("order", filters.order);
+    return ZZSCS_DATA.apiBase + "/cash-list?" + params.toString();
+  }
+
+  function buildExportUrl() {
+    var filters = getFilters();
+    var params = new URLSearchParams();
+    if (filters.start_date) params.append("start_date", filters.start_date);
+    if (filters.end_date) params.append("end_date", filters.end_date);
+    if (filters.keyword) params.append("keyword", filters.keyword);
+    if (filters.order) params.append("order", filters.order);
+    params.append("_wpnonce", ZZSCS_DATA.nonce);
+    return ZZSCS_DATA.apiBase + "/cash-export?" + params.toString();
+  }
+
+  function clearFilters() {
+    if (document.getElementById("zz-filter-start")) document.getElementById("zz-filter-start").value = "";
+    if (document.getElementById("zz-filter-end")) document.getElementById("zz-filter-end").value = "";
+    if (document.getElementById("zz-filter-keyword")) document.getElementById("zz-filter-keyword").value = "";
+    if (document.getElementById("zz-filter-limit")) document.getElementById("zz-filter-limit").value = "10";
+    if (document.getElementById("zz-filter-order")) document.getElementById("zz-filter-order").value = "desc";
+  }
+
+  async function loadTenants() {
+    try {
+      var res = await fetch(ZZSCS_DATA.apiBase + "/tenants", { method: "GET", credentials: "same-origin", headers: { "X-WP-Nonce": ZZSCS_DATA.nonce } });
+      var json = await res.json();
+      var select = document.getElementById("zz-tenant-switch");
+      if (!select || json.status !== "ok") return;
+
+      select.innerHTML = "";
+      json.data.forEach(function (t) {
+        var opt = document.createElement("option");
+        opt.value = t.id;
+        opt.textContent = t.name || t.company_name || ("公司#" + t.id);
+        if (t.current) opt.selected = true;
+        select.appendChild(opt);
+      });
+    } catch (err) { console.error("loadTenants error:", err); }
+  }
+
+  async function switchTenant(tenantId) {
+    try {
+      var res = await fetch(ZZSCS_DATA.apiBase + "/tenant-switch", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ tenant_id: tenantId }) });
+      var json = await res.json();
+      if (json.status === "ok") location.reload();
+      else showMsg(json.message || "切換公司失敗", true);
+    } catch (err) { showMsg("切換公司失敗：" + err, true); }
+  }
+
+  async function createTenant() {
+    var input = document.getElementById("zz-new-tenant-name");
+    if (!input) return;
+    var companyName = input.value.trim();
+    if (!companyName) { showMsg("請先填寫公司名稱", true); return; }
+
+    try {
+      setLoading(true, "建立公司中...");
+      var res = await fetch(ZZSCS_DATA.apiBase + "/tenant-create", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ company_name: companyName }) });
+      var json = await res.json();
+      if (json.status === "ok") location.reload();
+      else showMsg(json.message || "建立公司失敗", true);
+    } catch (err) { showMsg("建立公司失敗：" + err, true); } 
+    finally { setLoading(false, ""); }
+  }
+
+  async function loadCategories() {
+    try {
+      var res = await fetch(ZZSCS_DATA.apiBase + "/categories", { method: "GET", credentials: "same-origin", headers: { "X-WP-Nonce": ZZSCS_DATA.nonce } });
+      var json = await res.json();
+      if (json.status === "ok") { cachedCategories = json.data || []; updateCategoryList(); }
+      else { cachedCategories = []; }
+    } catch (err) { cachedCategories = []; console.error("loadCategories error:", err); }
+  }
+
+  async function loadAccounts() {
+    try {
+      var res = await fetch(ZZSCS_DATA.apiBase + "/accounts", { method: "GET", credentials: "same-origin", headers: { "X-WP-Nonce": ZZSCS_DATA.nonce } });
+      var json = await res.json();
+      if (json.status === "ok") {
+        var mainAccount = document.getElementById("zz-account");
+        var transferFrom = document.getElementById("zz-transfer-from");
+        var transferTo = document.getElementById("zz-transfer-to");
+        
+        var optionsHtml = '<option value="">-- 請選擇帳戶 --</option>' + json.data.map(function (a) { return '<option value="' + escapeHtml(a) + '">' + escapeHtml(a) + '</option>'; }).join("");
+        
+        if (transferFrom) transferFrom.innerHTML = optionsHtml;
+        if (transferTo) transferTo.innerHTML = optionsHtml;
+        if (mainAccount) { var currentVal = mainAccount.value; mainAccount.innerHTML = optionsHtml; if (currentVal) mainAccount.value = currentVal; }
+      }
+    } catch (err) { console.error("loadAccounts error:", err); }
+  }
+
+  async function addCashRecord() {
+    var type = document.getElementById("zz-type").value;
+    var amount = parseFloat(document.getElementById("zz-amount").value) || 0;
+    
+    var data = {
+      date: document.getElementById("zz-date").value,
+      memo: document.getElementById("zz-memo").value,
+      category: document.getElementById("zz-category").value,
+      account: document.getElementById("zz-account").value,
+      income: type === 'income' ? amount : 0,
+      expense: type === 'expense' ? amount : 0,
+      note: document.getElementById("zz-note").value
+    };
+
+    if (!data.date) { showMsg("請先填寫日期", true); return; }
+    if (!data.account) { showMsg("請選擇帳戶", true); return; }
+    if (!data.category) { showMsg("請填寫科目", true); return; }
+    if (amount <= 0) { showMsg("請輸入大於0的金額", true); return; }
+    if (!data.memo) { showMsg("請先填寫摘要", true); return; }
+
+    try {
+      setLoading(true, "送出記帳中...");
+      clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/cash-entry", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify(data) });
+      var json = await res.json();
+      if (json.status === "ok") {
+        clearForm();
+        showMsg("記帳成功，編號：" + json.id, false); 
+        await loadCategories(); await loadAccounts(); await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); await loadList();
+      } else { showMsg(json.message || "新增失敗", true); }
+    } catch (err) { showMsg("API連線失敗：" + err, true); } 
+    finally { setLoading(false, ""); }
+  }
+
+  async function updateCashRecord() {
+    var entryId = document.getElementById("zz-entry-id").value;
+    var type = document.getElementById("zz-type").value;
+    var amount = parseFloat(document.getElementById("zz-amount").value) || 0;
+
+    var data = {
+      entry_id: entryId,
+      date: document.getElementById("zz-date").value,
+      memo: document.getElementById("zz-memo").value,
+      category: document.getElementById("zz-category").value,
+      account: document.getElementById("zz-account").value,
+      income: type === 'income' ? amount : 0,
+      expense: type === 'expense' ? amount : 0,
+      note: document.getElementById("zz-note").value
+    };
+
+    if (!entryId) { showMsg("找不到要更新的資料編號", true); return; }
+    if (!data.date) { showMsg("請先填寫日期", true); return; }
+    if (!data.account) { showMsg("請選擇帳戶", true); return; }
+    if (!data.category) { showMsg("請填寫科目", true); return; }
+    if (amount <= 0) { showMsg("請輸入大於0的金額", true); return; }
+    if (!data.memo) { showMsg("請先填寫摘要", true); return; }
+
+    try {
+      setLoading(true, "更新記帳中...");
+      clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/cash-entry-update", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify(data) });
+      var json = await res.json();
+      if (json.status === "ok") {
+        clearForm();
+        showMsg("更新成功，編號：" + json.id, false);
+        await loadCategories(); await loadAccounts(); await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); await loadList();
+      } else { showMsg(json.message || "更新失敗", true); }
+    } catch (err) { showMsg("更新失敗：" + err, true); } 
+    finally { setLoading(false, ""); }
+  }
+
+  // 🔴 升級點：透過 isTransfer 參數，顯示更精準的防呆確認訊息
+  async function deleteCashRecord(id, isTransfer) {
+    var confirmMsg = isTransfer 
+        ? "確定刪除這組轉帳紀錄？\n這將同時刪除「轉出」與「轉入」兩筆資料，且刪除後無法復原！" 
+        : "確定刪除這筆記帳？\n刪除後將無法復原！";
+        
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      setLoading(true, "刪除記帳中...");
+      clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/cash-entry-delete", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ entry_id: id }) });
+      var json = await res.json();
+      if (json.status === "ok") {
+        showMsg("刪除成功", false);
+        await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); await loadList();
+      } else { showMsg(json.message || "刪除失敗", true); }
+    } catch (err) { showMsg("刪除失敗：" + err, true); } 
+    finally { setLoading(false, ""); }
+  }
+
+  async function loadSummary() {
+    var incEl = document.getElementById("zz-sum-income");
+    if (!incEl) return;
+    try {
+      var res = await fetch(ZZSCS_DATA.apiBase + "/cash-summary", { method: "GET", credentials: "same-origin", headers: { "X-WP-Nonce": ZZSCS_DATA.nonce } });
+      var json = await res.json();
+      if (json.status === "ok") {
+        incEl.textContent = formatNumber(json.incomeTotal);
+        document.getElementById("zz-sum-expense").textContent = formatNumber(json.expenseTotal);
+        document.getElementById("zz-sum-balance").textContent = formatNumber(json.balance);
+        document.getElementById("zz-month-income").textContent = formatNumber(json.monthIncome);
+        document.getElementById("zz-month-expense").textContent = formatNumber(json.monthExpense);
+        document.getElementById("zz-month-balance").textContent = formatNumber(json.monthBalance);
+      }
+    } catch (err) { console.error("loadSummary error:", err); }
+  }
+
+  async function loadAccountSummary() {
+    var wrap = document.getElementById("zz-account-summary-list");
+    if (!wrap) return;
+    wrap.innerHTML = '<div class="zzscs-account-summary-empty">讀取中...</div>';
+    try {
+      var res = await fetch(ZZSCS_DATA.apiBase + "/account-summary", { method: "GET", credentials: "same-origin", headers: { "X-WP-Nonce": ZZSCS_DATA.nonce } });
+      var json = await res.json();
+      if (json.status === "ok") {
+        if (!json.data || json.data.length === 0) { wrap.innerHTML = '<div class="zzscs-account-summary-empty">目前沒有帳戶資料</div>'; return; }
+        wrap.innerHTML = json.data.map(function (item) { return '<div class="zzscs-account-card"><div class="zzscs-account-card-name">' + escapeHtml(item.account_name) + '</div><div class="zzscs-account-card-row">收入：' + formatNumber(item.total_income) + '</div><div class="zzscs-account-card-row">支出：' + formatNumber(item.total_expense) + '</div><div class="zzscs-account-card-balance">餘額：' + formatNumber(item.balance) + '</div></div>'; }).join("");
+      } else { wrap.innerHTML = '<div class="zzscs-account-summary-empty">讀取失敗</div>'; }
+    } catch (err) { wrap.innerHTML = '<div class="zzscs-account-summary-empty">API連線失敗</div>'; console.error("loadAccountSummary error:", err); }
+  }
+
+  async function loadAccountManageList() {
+    var tbody = document.getElementById("zz-account-manage-tbody");
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="5">讀取中...</td></tr>';
+    try {
+      var res = await fetch(ZZSCS_DATA.apiBase + "/account-list", { method: "GET", credentials: "same-origin", headers: { "X-WP-Nonce": ZZSCS_DATA.nonce } });
+      var json = await res.json();
+      if (json.status === "ok") {
+        if (!json.data || json.data.length === 0) { tbody.innerHTML = '<tr><td colspan="5">目前沒有帳戶資料</td></tr>'; return; }
+        tbody.innerHTML = json.data.map(function (item) {
+          var statusText = item.status === "active" ? "啟用中" : "已停用";
+          var actionHtml = item.status === "active" ? '<button type="button" class="zz-account-edit" data-id="' + item.id + '" data-name="' + escapeHtml(item.account_name) + '" data-type="' + escapeHtml(item.account_type) + '" data-opening="' + item.opening_balance + '">編輯</button> <button type="button" class="zz-account-disable" data-id="' + item.id + '">停用</button>' : '<button type="button" class="zz-account-enable" data-id="' + item.id + '">啟用</button>';
+          var typeText = item.account_type === "bank" ? "銀行" : (item.account_type === "cash" ? "現金" : "其他");
+          return "<tr><td>" + escapeHtml(item.account_name) + "</td><td>" + escapeHtml(typeText) + "</td><td>" + formatNumber(item.opening_balance) + "</td><td>" + escapeHtml(statusText) + "</td><td>" + actionHtml + "</td></tr>";
+        }).join("");
+        document.querySelectorAll(".zz-account-disable").forEach(function (btn) { btn.addEventListener("click", function () { disableAccount(this.dataset.id); }); });
+        document.querySelectorAll(".zz-account-enable").forEach(function (btn) { btn.addEventListener("click", function () { enableAccount(this.dataset.id); }); });
+        document.querySelectorAll(".zz-account-edit").forEach(function (btn) { btn.addEventListener("click", function () { startEditAccount(this.dataset.id, this.dataset.name, this.dataset.type, this.dataset.opening); }); });
+      } else { tbody.innerHTML = '<tr><td colspan="5">讀取失敗</td></tr>'; }
+    } catch (err) { tbody.innerHTML = '<tr><td colspan="5">API連線失敗</td></tr>'; console.error("loadAccountManageList error:", err); }
+  }
+
+  async function createAccount() {
+    var nameEl = document.getElementById("zz-new-account-name");
+    var typeEl = document.getElementById("zz-new-account-type");
+    var openingEl = document.getElementById("zz-new-account-opening");
+    if (!nameEl || !typeEl || !openingEl) return;
+    var accountName = nameEl.value.trim(); var accountType = typeEl.value; var openingBalance = openingEl.value || 0;
+    if (!accountName) { showAccountMsg("請先填寫帳戶名稱", true); return; }
+
+    try {
+      setLoading(true, "新增帳戶中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/account-create", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ account_name: accountName, account_type: accountType, opening_balance: openingBalance }) });
+      var json = await res.json();
+      if (json.status === "ok") { nameEl.value = ""; typeEl.value = "cash"; openingEl.value = 0; showAccountMsg("帳戶新增成功", false); await loadAccounts(); await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); } 
+      else { showAccountMsg(json.message || "新增帳戶失敗", true); }
+    } catch (err) { showAccountMsg("新增帳戶失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  async function disableAccount(accountId) {
+    if (!confirm("確定停用這個帳戶？\n停用後將無法在記帳表單中選擇此帳戶。")) return;
+    try {
+      setLoading(true, "停用帳戶中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/account-disable", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ account_id: accountId }) });
+      var json = await res.json();
+      if (json.status === "ok") { showAccountTableMsg("帳戶已停用", false); await loadAccounts(); await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); } 
+      else { showAccountTableMsg(json.message || "停用帳戶失敗", true); }
+    } catch (err) { showAccountTableMsg("停用帳戶失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  function startEditAccount(id, name, type, opening) {
+    var idEl = document.getElementById("zz-account-edit-id"), nameEl = document.getElementById("zz-new-account-name"), typeEl = document.getElementById("zz-new-account-type"), openingEl = document.getElementById("zz-new-account-opening"), createBtn = document.getElementById("zz-account-create"), updateBtn = document.getElementById("zz-account-update"), cancelBtn = document.getElementById("zz-account-cancel-edit");
+    if (!idEl || !nameEl || !typeEl || !openingEl || !createBtn || !updateBtn || !cancelBtn) return;
+    idEl.value = id || ""; nameEl.value = name || ""; typeEl.value = type || "cash"; openingEl.value = opening || 0;
+    createBtn.style.display = "none"; updateBtn.style.display = "inline-flex"; cancelBtn.style.display = "inline-flex";
+    clearAllMsgs(); showAccountMsg("已進入編輯模式", false);
+  }
+
+  function cancelEditAccount() {
+    var idEl = document.getElementById("zz-account-edit-id"), nameEl = document.getElementById("zz-new-account-name"), typeEl = document.getElementById("zz-new-account-type"), openingEl = document.getElementById("zz-new-account-opening"), createBtn = document.getElementById("zz-account-create"), updateBtn = document.getElementById("zz-account-update"), cancelBtn = document.getElementById("zz-account-cancel-edit");
+    if (!idEl || !nameEl || !typeEl || !openingEl || !createBtn || !updateBtn || !cancelBtn) return;
+    idEl.value = ""; nameEl.value = ""; typeEl.value = "cash"; openingEl.value = 0;
+    createBtn.style.display = "inline-flex"; updateBtn.style.display = "none"; cancelBtn.style.display = "none";
+    clearAllMsgs(); showAccountMsg("已取消帳戶編輯", false);
+  }
+
+  async function updateAccount() {
+    var idEl = document.getElementById("zz-account-edit-id"), nameEl = document.getElementById("zz-new-account-name"), typeEl = document.getElementById("zz-new-account-type"), openingEl = document.getElementById("zz-new-account-opening");
+    if (!idEl || !nameEl || !typeEl || !openingEl) return;
+    var accountId = idEl.value, accountName = nameEl.value.trim(), accountType = typeEl.value, openingBalance = openingEl.value || 0;
+    if (!accountId) { showAccountMsg("找不到要更新的帳戶ID", true); return; }
+    if (!accountName) { showAccountMsg("請先填寫帳戶名稱", true); return; }
+
+    try {
+      setLoading(true, "更新帳戶中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/account-update", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ account_id: accountId, account_name: accountName, account_type: accountType, opening_balance: openingBalance }) });
+      var json = await res.json();
+      if (json.status === "ok") { cancelEditAccount(); showAccountMsg("帳戶更新成功", false); await loadAccounts(); await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); } 
+      else { showAccountMsg(json.message || "更新帳戶失敗", true); }
+    } catch (err) { showAccountMsg("更新帳戶失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  async function enableAccount(accountId) {
+    try {
+      setLoading(true, "啟用帳戶中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/account-enable", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ account_id: accountId }) });
+      var json = await res.json();
+      if (json.status === "ok") { showAccountTableMsg("帳戶已重新啟用", false); await loadAccounts(); await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); } 
+      else { showAccountTableMsg(json.message || "啟用帳戶失敗", true); }
+    } catch (err) { showAccountTableMsg("啟用帳戶失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  async function createTransfer() {
+    var dateEl = document.getElementById("zz-transfer-date"), amountEl = document.getElementById("zz-transfer-amount"), fromEl = document.getElementById("zz-transfer-from"), toEl = document.getElementById("zz-transfer-to"), noteEl = document.getElementById("zz-transfer-note");
+    if (!dateEl || !amountEl || !fromEl || !toEl || !noteEl) return;
+    var data = { date: dateEl.value, amount: amountEl.value || 0, from_account: fromEl.value.trim(), to_account: toEl.value.trim(), note: noteEl.value };
+
+    if (!data.date) { showTransferMsg("請先填寫轉帳日期", true); return; }
+    if (!data.from_account) { showTransferMsg("請選擇轉出帳戶", true); return; }
+    if (!data.to_account) { showTransferMsg("請選擇轉入帳戶", true); return; }
+    if (data.from_account === data.to_account) { showTransferMsg("轉出帳戶與轉入帳戶不可相同", true); toEl.value = ""; return; }
+    if (Number(data.amount) <= 0) { showTransferMsg("轉帳金額必須大於0", true); return; }
+
+    try {
+      setLoading(true, "送出轉帳中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/transfer-create", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify(data) });
+      var json = await res.json();
+      if (json.status === "ok") { clearTransferForm(); showTransferMsg("轉帳成功，代碼：" + json.transfer_code, false); await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); await loadList(); } 
+      else { showTransferMsg(json.message || "轉帳失敗", true); }
+    } catch (err) { showTransferMsg("轉帳失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  async function loadCategoryManageList() {
+    var tbody = document.getElementById("zz-category-manage-tbody");
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="4">讀取中...</td></tr>';
+    try {
+      var res = await fetch(ZZSCS_DATA.apiBase + "/category-list", { method: "GET", credentials: "same-origin", headers: { "X-WP-Nonce": ZZSCS_DATA.nonce } });
+      var json = await res.json();
+      if (json.status === "ok") {
+        if (!json.data || json.data.length === 0) { tbody.innerHTML = '<tr><td colspan="4">目前沒有科目資料</td></tr>'; return; }
+        tbody.innerHTML = json.data.map(function (item) {
+          var statusText = item.status === "active" ? "啟用中" : "已停用";
+          var actionHtml = item.status === "active" ? '<button type="button" class="zz-category-edit zz-edit" data-id="' + item.id + '" data-name="' + escapeHtml(item.category_name || '') + '" data-type="' + escapeHtml(item.category_type || 'expense') + '">編輯</button> <button type="button" class="zz-category-disable zz-delete" data-id="' + item.id + '">停用</button>' : '<button type="button" class="zz-category-enable" data-id="' + item.id + '">啟用</button>';
+          var typeText = item.category_type === "income" ? "收入" : "支出";
+          return "<tr><td>" + escapeHtml(item.category_name || "") + "</td><td>" + escapeHtml(typeText) + "</td><td>" + escapeHtml(statusText) + "</td><td>" + actionHtml + "</td></tr>";
+        }).join("");
+        document.querySelectorAll(".zz-category-disable").forEach(function (btn) { btn.addEventListener("click", function () { disableCategory(this.dataset.id); }); });
+        document.querySelectorAll(".zz-category-enable").forEach(function (btn) { btn.addEventListener("click", function () { enableCategory(this.dataset.id); }); });
+        document.querySelectorAll(".zz-category-edit").forEach(function (btn) { btn.addEventListener("click", function () { startEditCategory(this.dataset.id, this.dataset.name, this.dataset.type); }); });
+      } else { tbody.innerHTML = '<tr><td colspan="4">讀取失敗</td></tr>'; }
+    } catch (err) { tbody.innerHTML = '<tr><td colspan="4">API連線失敗</td></tr>'; console.error("loadCategoryManageList error:", err); }
+  }
+
+  async function createCategory() {
+    var nameEl = document.getElementById("zz-new-category-name"), typeEl = document.getElementById("zz-new-category-type");
+    if (!nameEl || !typeEl) return;
+    var categoryName = nameEl.value.trim(), categoryType = typeEl.value;
+    if (!categoryName) { showCategoryMsg("請先填寫科目名稱", true); return; }
+
+    try {
+      setLoading(true, "新增科目中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/category-create", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ category_name: categoryName, category_type: categoryType }) });
+      var json = await res.json();
+      if (json.status === "ok") { nameEl.value = ""; typeEl.value = "expense"; showCategoryMsg("科目新增成功", false); await loadCategories(); await loadCategoryManageList(); } 
+      else { showCategoryMsg(json.message || "新增科目失敗", true); }
+    } catch (err) { showCategoryMsg("新增科目失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  async function updateCategory() {
+    var idEl = document.getElementById("zz-category-edit-id"), nameEl = document.getElementById("zz-new-category-name"), typeEl = document.getElementById("zz-new-category-type");
+    if (!idEl || !nameEl || !typeEl) return;
+    var categoryId = idEl.value, categoryName = nameEl.value.trim(), categoryType = typeEl.value;
+    if (!categoryId) { showCategoryMsg("找不到要更新的科目ID", true); return; }
+    if (!categoryName) { showCategoryMsg("請先填寫科目名稱", true); return; }
+
+    try {
+      setLoading(true, "更新科目中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/category-update", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ category_id: categoryId, category_name: categoryName, category_type: categoryType }) });
+      var json = await res.json();
+      if (json.status === "ok") { cancelEditCategory(); showCategoryMsg("科目更新成功", false); await loadCategories(); await loadCategoryManageList(); } 
+      else { showCategoryMsg(json.message || "更新科目失敗", true); }
+    } catch (err) { showCategoryMsg("更新科目失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  async function disableCategory(categoryId) {
+    if (!confirm("確定停用這個科目？")) return;
+    try {
+      setLoading(true, "停用科目中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/category-disable", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ category_id: categoryId }) });
+      var json = await res.json();
+      if (json.status === "ok") { showCategoryTableMsg("科目已停用", false); await loadCategories(); await loadCategoryManageList(); } 
+      else { showCategoryTableMsg(json.message || "停用科目失敗", true); }
+    } catch (err) { showCategoryTableMsg("停用科目失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  async function enableCategory(categoryId) {
+    try {
+      setLoading(true, "啟用科目中..."); clearAllMsgs();
+      var res = await fetch(ZZSCS_DATA.apiBase + "/category-enable", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-WP-Nonce": ZZSCS_DATA.nonce }, body: JSON.stringify({ category_id: categoryId }) });
+      var json = await res.json();
+      if (json.status === "ok") { showCategoryTableMsg("科目已重新啟用", false); await loadCategories(); await loadCategoryManageList(); } 
+      else { showCategoryTableMsg(json.message || "啟用科目失敗", true); }
+    } catch (err) { showCategoryTableMsg("啟用科目失敗：" + err, true); } finally { setLoading(false, ""); }
+  }
+
+  function startEditCategory(id, name, type) {
+    var idEl = document.getElementById("zz-category-edit-id"), nameEl = document.getElementById("zz-new-category-name"), typeEl = document.getElementById("zz-new-category-type"), createBtn = document.getElementById("zz-category-create"), updateBtn = document.getElementById("zz-category-update"), cancelBtn = document.getElementById("zz-category-cancel-edit");
+    if (!idEl || !nameEl || !typeEl || !createBtn || !updateBtn || !cancelBtn) return;
+    idEl.value = id || ""; nameEl.value = name || ""; typeEl.value = type || "expense";
+    createBtn.style.display = "none"; updateBtn.style.display = "inline-flex"; cancelBtn.style.display = "inline-flex";
+    clearAllMsgs(); showCategoryMsg("已進入編輯模式", false);
+  }
+
+  function cancelEditCategory() {
+    var idEl = document.getElementById("zz-category-edit-id"), nameEl = document.getElementById("zz-new-category-name"), typeEl = document.getElementById("zz-new-category-type"), createBtn = document.getElementById("zz-category-create"), updateBtn = document.getElementById("zz-category-update"), cancelBtn = document.getElementById("zz-category-cancel-edit");
+    if (!idEl || !nameEl || !typeEl || !createBtn || !updateBtn || !cancelBtn) return;
+    idEl.value = ""; nameEl.value = ""; typeEl.value = "expense";
+    createBtn.style.display = "inline-flex"; updateBtn.style.display = "none"; cancelBtn.style.display = "none";
+    clearAllMsgs(); showCategoryMsg("已取消科目編輯", false);
+  }
+
+  async function loadList() {
+    var tbody = document.getElementById("zz-tbody");
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="8">讀取中...</td></tr>';
+    try {
+      var res = await fetch(buildListUrl(), { method: "GET", credentials: "same-origin", headers: { "X-WP-Nonce": ZZSCS_DATA.nonce } });
+      var json = await res.json();
+      if (json.status === "ok") {
+        if (!json.data || json.data.length === 0) { tbody.innerHTML = '<tr><td colspan="8">目前沒有資料</td></tr>'; return; }
+        tbody.innerHTML = json.data.map(function (item) {
+          var categoryDisplay = escapeHtml(item.category);
+          var actionHtml = '';
+          
+          // 🔴 關鍵更新：將轉帳屬性附加在 dataset 中，供後續精準判斷
+          if (item.transfer_code) {
+              categoryDisplay += ' <span class="zz-transfer-badge">轉帳</span>';
+              actionHtml = '<button type="button" class="zz-entry-delete" data-id="' + item.id + '" data-istransfer="1">刪除轉帳(整組)</button>';
+          } else {
+              actionHtml = '<button type="button" class="zz-entry-edit" data-id="' + item.id + '">編輯</button> ' +
+                           '<button type="button" class="zz-entry-delete" data-id="' + item.id + '" data-istransfer="0">刪除</button>';
+          }
+
+          return "<tr><td>" + escapeHtml(item.entry_date) + "</td><td>" + escapeHtml(item.account) + "</td><td>" + categoryDisplay + "</td><td>" + escapeHtml(item.memo) + "</td><td>" + formatNumber(item.income) + "</td><td>" + formatNumber(item.expense) + "</td><td>" + escapeHtml(item.note) + "</td><td>" + actionHtml + "</td></tr>";
+        }).join("");
+        
+        document.querySelectorAll(".zz-entry-edit").forEach(function (btn) { btn.addEventListener("click", function () { var id = this.dataset.id; var target = json.data.find(function (row) { return String(row.id) === String(id); }); if (target) setEditMode(target); }); });
+        
+        // 🔴 傳遞 isTransfer 狀態給 delete 函式
+        document.querySelectorAll(".zz-entry-delete").forEach(function (btn) { 
+            btn.addEventListener("click", function () { 
+                var isTransfer = this.dataset.istransfer === "1";
+                deleteCashRecord(this.dataset.id, isTransfer); 
+            }); 
+        });
+      } else { tbody.innerHTML = '<tr><td colspan="8">讀取失敗</td></tr>'; }
+    } catch (err) { tbody.innerHTML = '<tr><td colspan="8">API連線失敗</td></tr>'; console.error("loadList error:", err); }
+  }
+
+  async function refreshAll(showSuccessMessage) {
+    try {
+      setLoading(true, "重新讀取資料中...");
+      await loadTenants(); await loadCategories(); await loadAccounts();
+      await loadSummary(); await loadAccountSummary(); await loadAccountManageList(); 
+      await loadCategoryManageList(); await loadList();
+      if (showSuccessMessage) { clearAllMsgs(); showMsg("資料已更新", false); }
+    } catch (err) { showMsg("重新整理失敗：" + err, true); } 
+    finally { setLoading(false, ""); }
+  }
+
+  document.addEventListener("DOMContentLoaded", async function () {
+    var dateEl = document.getElementById("zz-date"), submitBtn = document.getElementById("zz-submit"), refreshBtn = document.getElementById("zz-refresh"), typeSelect = document.getElementById("zz-type"), categoryInput = document.getElementById("zz-category"), memoEl = document.getElementById("zz-memo"), tenantSelect = document.getElementById("zz-tenant-switch"), showCreateBtn = document.getElementById("zz-show-create-tenant"), createBox = document.getElementById("zz-create-tenant-box"), createTenantBtn = document.getElementById("zz-create-tenant-btn"), cancelCreateBtn = document.getElementById("zz-cancel-create-tenant"), newTenantInput = document.getElementById("zz-new-tenant-name"), cancelEditBtn = document.getElementById("zz-cancel-edit"), filterBtn = document.getElementById("zz-filter-btn"), filterClearBtn = document.getElementById("zz-filter-clear"), exportBtn = document.getElementById("zz-export-csv");
+    var accountCreateBtn = document.getElementById("zz-account-create"), accountUpdateBtn = document.getElementById("zz-account-update"), accountCancelEditBtn = document.getElementById("zz-account-cancel-edit");
+    var transferDateEl = document.getElementById("zz-transfer-date"), transferSubmitBtn = document.getElementById("zz-transfer-submit"), transferClearBtn = document.getElementById("zz-transfer-clear");
+    var categoryCreateBtn = document.getElementById("zz-category-create"), categoryUpdateBtn = document.getElementById("zz-category-update"), categoryCancelEditBtn = document.getElementById("zz-category-cancel-edit");
+
+    if (dateEl) {
+      var localNow = new Date(); var year = localNow.getFullYear(); var month = String(localNow.getMonth() + 1).padStart(2, "0"); var day = String(localNow.getDate()).padStart(2, "0");
+      dateEl.value = year + "-" + month + "-" + day;
+    }
+    if (transferDateEl) {
+      var lNow = new Date(); var y = lNow.getFullYear(); var m = String(lNow.getMonth() + 1).padStart(2, "0"); var d = String(lNow.getDate()).padStart(2, "0");
+      transferDateEl.value = y + "-" + m + "-" + d;
+    }
+
+    document.querySelectorAll('.zzscs-nav a').forEach(function(link) {
+        link.addEventListener('click', function() {
+            document.querySelectorAll('.zzscs-nav a').forEach(function(l) { l.classList.remove('active'); });
+            this.classList.add('active');
+        });
+    });
+
+    if (typeSelect) {
+        typeSelect.addEventListener("change", function() {
+            updateCategoryList();
+            if (categoryInput) categoryInput.value = ""; 
+        });
+    }
+
+    if (submitBtn) submitBtn.addEventListener("click", function () { var entryId = document.getElementById("zz-entry-id").value; if (entryId) { updateCashRecord(); } else { addCashRecord(); } });
+    if (refreshBtn) refreshBtn.addEventListener("click", function () { refreshAll(true); });
+    if (tenantSelect) tenantSelect.addEventListener("change", function () { switchTenant(this.value); });
+    if (showCreateBtn && createBox) showCreateBtn.addEventListener("click", function () { createBox.style.display = createBox.style.display === "none" ? "block" : "none"; if (createBox.style.display === "block" && newTenantInput) newTenantInput.focus(); });
+    if (cancelCreateBtn && createBox && newTenantInput) cancelCreateBtn.addEventListener("click", function () { createBox.style.display = "none"; newTenantInput.value = ""; });
+    if (createTenantBtn) createTenantBtn.addEventListener("click", createTenant);
+    if (newTenantInput) newTenantInput.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); createTenant(); } });
+    if (cancelEditBtn) cancelEditBtn.addEventListener("click", function () { clearForm(); showMsg("已取消編輯", false); });
+    if (filterBtn) filterBtn.addEventListener("click", function () { loadList(); });
+    if (filterClearBtn) filterClearBtn.addEventListener("click", function () { clearFilters(); loadList(); });
+    if (exportBtn) exportBtn.addEventListener("click", function () { window.location.href = buildExportUrl(); });
+    
+    if (accountCreateBtn) accountCreateBtn.addEventListener("click", createAccount);
+    if (accountUpdateBtn) accountUpdateBtn.addEventListener("click", updateAccount);
+    if (accountCancelEditBtn) accountCancelEditBtn.addEventListener("click", cancelEditAccount);
+    if (transferSubmitBtn) transferSubmitBtn.addEventListener("click", createTransfer);
+    if (transferClearBtn) transferClearBtn.addEventListener("click", clearTransferForm);
+    if (categoryCreateBtn) categoryCreateBtn.addEventListener("click", createCategory);
+    if (categoryUpdateBtn) categoryUpdateBtn.addEventListener("click", updateCategory);
+    if (categoryCancelEditBtn) categoryCancelEditBtn.addEventListener("click", cancelEditCategory);
+
+    if (memoEl) {
+      var memoSuggest = { "午餐": "餐費", "晚餐": "餐費", "早餐": "餐費", "uber": "交通", "taxi": "交通", "捷運": "交通", "高鐵": "交通", "hotel": "住宿", "飯店": "住宿" };
+      memoEl.addEventListener("blur", function () {
+        var memo = this.value || "";
+        var categoryEl = document.getElementById("zz-category");
+        if (!categoryEl || categoryEl.value) return; 
+        for (var key in memoSuggest) { 
+            if (memo.toLowerCase().includes(key.toLowerCase())) { 
+                if (typeSelect && typeSelect.value !== "expense") { typeSelect.value = "expense"; }
+                updateCategoryList();
+                categoryEl.value = memoSuggest[key]; 
+                break; 
+            } 
+        }
+      });
+    }
+
+    try {
+      setLoading(true, "初始化載入中...");
+      await loadTenants(); 
+      if (typeof ZZSCS_DATA !== 'undefined' && String(ZZSCS_DATA.hasTenant) === '1') {
+          await loadCategories(); await loadAccounts(); await loadSummary(); await loadAccountSummary(); 
+          await loadAccountManageList(); await loadCategoryManageList(); await loadList();
+      }
+    } finally { setLoading(false, ""); }
+  });
+})();
+
+================================================================
+檔案路徑：public/shortcode-cashbook.php
+================================================================
+<?php
+// shortcode-cashbook.php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+add_shortcode('zanzan_cashbook', 'zzscs_render_cashbook_shortcode');
+
+function zzscs_render_cashbook_shortcode() {
+    // 💡 CSS 已經移到主程式的 wp_enqueue_scripts 提早載入，這裡不再呼叫
+
+    if (!is_user_logged_in()) {
+        $login_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : wp_login_url(get_permalink());
+        return '<div class="zzscs-paywall-wrap">
+            <h2>請先登入 👋</h2>
+            <p>您需要登入會員帳號，才能使用贊贊記帳系統。</p>
+            <a href="' . esc_url($login_url) . '">前往登入</a>
+        </div>';
+    }
+
+    $has_access = false;
+    $user_id = get_current_user_id();
+
+    $subscribe_url = defined('ZZSCS_SUBSCRIBE_URL_PATH') ? home_url(ZZSCS_SUBSCRIBE_URL_PATH) : home_url('/shop/');
+    $required_product_id = defined('ZZSCS_REQUIRED_PRODUCT_ID') ? ZZSCS_REQUIRED_PRODUCT_ID : 0; 
+
+    if (current_user_can('manage_options')) {
+        $has_access = true;
+    } 
+    else {
+        if (!function_exists('wcs_user_has_subscription')) {
+            return '<div class="zzscs-paywall-wrap">
+                <h2>系統維護中 🛠️</h2>
+                <p>訂閱驗證系統目前暫時不可用，為保護您的權益已暫停存取。<br>請稍後再試或聯絡網站管理員。</p>
+            </div>';
+        }
+
+        if ($required_product_id > 0) {
+            if (
+                wcs_user_has_subscription($user_id, $required_product_id, 'active') ||
+                wcs_user_has_subscription($user_id, $required_product_id, 'pending-cancel')
+            ) {
+                $has_access = true;
+            }
+        } else {
+            if (
+                wcs_user_has_subscription($user_id, '', 'active') ||
+                wcs_user_has_subscription($user_id, '', 'pending-cancel')
+            ) {
+                $has_access = true;
+            }
+        }
+    }
+
+    if (!$has_access) {
+        return '<div class="zzscs-paywall-wrap">
+            <h2>系統權限已鎖定 🔒</h2>
+            <p>您目前沒有啟用中的訂閱方案，或是訂閱已經到期。<br>請訂閱「贊贊記帳」方案來解鎖或恢復您的專屬雲端帳本！</p>
+            <a href="' . esc_url($subscribe_url) . '">前往了解訂閱方案</a>
+        </div>';
+    }
+
+    $has_tenant = zzscs_current_user_has_tenant();
+
+    // JS 依舊留在這裡載入，這樣對效能最好
+    wp_enqueue_script('zzscs-cashbook-js', ZZSCS_URL . 'assets/js/cashbook.js', [], ZZSCS_VERSION, true);
+
+    wp_localize_script('zzscs-cashbook-js', 'ZZSCS_DATA', [
+        'apiBase'   => esc_url_raw(rest_url('zanzan-erp/v1')),
+        'nonce'     => wp_create_nonce('wp_rest'),
+        'hasTenant' => $has_tenant ? '1' : '0' 
+    ]);
+
+    ob_start();
+    ?>
+    <div class="zzscs-wrap">
+        <h2>贊贊記帳</h2>
+
+        <?php if ($has_tenant): ?>
+        <div class="zzscs-nav">
+            <a href="#zz-sec-entry" class="active">記帳</a>
+            <a href="#zz-sec-summary">儀表板</a>
+            <a href="#zz-sec-transfer">轉帳</a>
+            <a href="#zz-sec-accounts">帳戶設定</a>
+            <a href="#zz-sec-categories">科目設定</a>
+            <a href="#zz-sec-list">明細表</a>
+        </div>
+        <?php else: ?>
+        <div class="zzscs-welcome-box">
+            <h3>歡迎使用贊贊記帳！</h3>
+            <p>請先建立您的第一家公司（或帳本）來開始使用。</p>
+        </div>
+        <?php endif; ?>
+
+        <div class="zzscs-tenant-row">
+            <label for="zz-tenant-switch">公司：</label>
+            <select id="zz-tenant-switch"></select>
+            <button type="button" id="zz-show-create-tenant" class="zzscs-small-btn">＋新增公司</button>
+        </div>
+
+        <div id="zz-create-tenant-box" class="zzscs-create-tenant-box" style="display:none;">
+            <label for="zz-new-tenant-name">公司名稱</label>
+            <input type="text" id="zz-new-tenant-name" placeholder="例如：贊贊投資帳" autocomplete="off">
+            <div class="zzscs-create-tenant-actions">
+                <button type="button" id="zz-create-tenant-btn" class="zzscs-small-btn primary">建立公司</button>
+                <button type="button" id="zz-cancel-create-tenant" class="zzscs-small-btn">取消</button>
+            </div>
+        </div>
+
+        <?php if ($has_tenant): ?>
+        <div class="zzscs-form" id="zz-sec-entry">
+            <div class="zzscs-grid">
+                <div><label for="zz-date">日期</label><input type="date" id="zz-date"></div>
+                <div><label for="zz-account">帳戶</label><select id="zz-account"></select></div>
+                <div>
+                    <label for="zz-type">收支類型</label>
+                    <select id="zz-type">
+                        <option value="expense">支出</option>
+                        <option value="income">收入</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="zz-category">科目</label>
+                    <input type="text" id="zz-category" list="zz-category-list" placeholder="下拉選擇或自行輸入" autocomplete="off">
+                    <datalist id="zz-category-list"></datalist>
+                </div>
+                <div><label for="zz-amount">金額</label><input type="number" id="zz-amount" value="0" min="0" step="1"></div>
+                <div><label for="zz-memo">摘要</label><input type="text" id="zz-memo" placeholder="例如：午餐、專案尾款" autocomplete="off"></div>
+            </div>
+            <div class="zzscs-note"><label for="zz-note">備註</label><textarea id="zz-note" rows="2" placeholder="補充說明" autocomplete="off"></textarea></div>
+            <div class="zzscs-actions">
+                <button id="zz-submit" type="button">送出記帳</button>
+                <button id="zz-refresh" type="button" class="secondary">重新整理</button>
+                <button id="zz-cancel-edit" type="button" class="secondary" style="display:none;">取消編輯</button>
+            </div>
+            <input type="hidden" id="zz-entry-id" value="">
+            <div id="zz-msg"></div>
+            <div id="zz-loading" style="display:none;">處理中，請稍候...</div>
+        </div>
+
+        <div class="zzscs-summary" id="zz-sec-summary">
+            <div class="zzscs-card"><div class="zzscs-card-title">總收入 <small>(不含轉帳)</small></div><div class="zzscs-card-value" id="zz-sum-income">0</div></div>
+            <div class="zzscs-card"><div class="zzscs-card-title">總支出 <small>(不含轉帳)</small></div><div class="zzscs-card-value" id="zz-sum-expense">0</div></div>
+            <div class="zzscs-card"><div class="zzscs-card-title">目前資金餘額</div><div class="zzscs-card-value" id="zz-sum-balance">0</div></div>
+            <div class="zzscs-card"><div class="zzscs-card-title">本月收入 <small>(不含轉帳)</small></div><div class="zzscs-card-value" id="zz-month-income">0</div></div>
+            <div class="zzscs-card"><div class="zzscs-card-title">本月支出 <small>(不含轉帳)</small></div><div class="zzscs-card-value" id="zz-month-expense">0</div></div>
+            <div class="zzscs-card"><div class="zzscs-card-title">本月損益</div><div class="zzscs-card-value" id="zz-month-balance">0</div></div>
+        </div>
+
+        <div class="zzscs-account-summary">
+            <h3>帳戶餘額</h3>
+            <div id="zz-account-summary-list" class="zzscs-account-summary-list"><div class="zzscs-account-summary-empty">讀取中...</div></div>
+        </div>
+
+        <div class="zzscs-transfer-box" id="zz-sec-transfer">
+            <h3>帳戶轉帳</h3>
+            <div class="zzscs-transfer-form">
+                <div class="zzscs-grid">
+                    <div><label for="zz-transfer-date">日期</label><input type="date" id="zz-transfer-date"></div>
+                    <div><label for="zz-transfer-amount">金額</label><input type="number" id="zz-transfer-amount" value="0" min="0" step="1"></div>
+                    <div><label for="zz-transfer-from">轉出帳戶</label><select id="zz-transfer-from"></select></div>
+                    <div><label for="zz-transfer-to">轉入帳戶</label><select id="zz-transfer-to"></select></div>
+                </div>
+                <div class="zzscs-note"><label for="zz-transfer-note">備註</label><textarea id="zz-transfer-note" rows="2" placeholder="例如：提款備用" autocomplete="off"></textarea></div>
+                <div class="zzscs-actions">
+                    <button type="button" id="zz-transfer-submit" class="zzscs-small-btn primary">送出轉帳</button>
+                    <button type="button" id="zz-transfer-clear" class="zzscs-small-btn">清除</button>
+                </div>
+                <div id="zz-transfer-msg"></div>
+            </div>
+        </div>
+
+        <div class="zzscs-account-manage" id="zz-sec-accounts">
+            <h3>帳戶管理</h3>
+            <div class="zzscs-account-manage-form">
+                <div class="zzscs-grid">
+                    <div><label for="zz-new-account-name">帳戶名稱</label><input type="text" id="zz-new-account-name" placeholder="例如：零用金、玉山銀行" autocomplete="off"></div>
+                    <div><label for="zz-new-account-type">帳戶類型</label><select id="zz-new-account-type"><option value="cash">現金</option><option value="bank">銀行</option><option value="other">其他</option></select></div>
+                    <div><label for="zz-new-account-opening">期初餘額</label><input type="number" id="zz-new-account-opening" value="0" step="1"></div>
+                </div>
+                <div class="zzscs-actions">
+                    <button type="button" id="zz-account-create" class="zzscs-small-btn primary">新增帳戶</button>
+                    <button type="button" id="zz-account-update" class="zzscs-small-btn primary" style="display:none;">更新帳戶</button>
+                    <button type="button" id="zz-account-cancel-edit" class="zzscs-small-btn" style="display:none;">取消編輯</button>
+                    <input type="hidden" id="zz-account-edit-id" value="">
+                </div>
+                <div id="zz-account-msg"></div>
+            </div>
+            <div class="zzscs-account-manage-table-wrap">
+                <table class="zzscs-account-manage-table">
+                    <thead><tr><th>帳戶名稱</th><th>類型</th><th>期初餘額</th><th>狀態</th><th>操作</th></tr></thead>
+                    <tbody id="zz-account-manage-tbody"><tr><td colspan="5">讀取中...</td></tr></tbody>
+                </table>
+                <div id="zz-account-table-msg"></div>
+            </div>
+        </div>
+
+        <div class="zzscs-account-manage" id="zz-sec-categories">
+            <h3>科目管理</h3>
+            <div class="zzscs-account-manage-form">
+                <div class="zzscs-grid">
+                    <div><label for="zz-new-category-name">科目名稱</label><input type="text" id="zz-new-category-name" placeholder="例如：餐費、一般收入" autocomplete="off"></div>
+                    <div><label for="zz-new-category-type">收支類型</label><select id="zz-new-category-type"><option value="expense">支出</option><option value="income">收入</option></select></div>
+                </div>
+                <div class="zzscs-actions">
+                    <button type="button" id="zz-category-create" class="zzscs-small-btn primary">新增科目</button>
+                    <button type="button" id="zz-category-update" class="zzscs-small-btn primary" style="display:none;">更新科目</button>
+                    <button type="button" id="zz-category-cancel-edit" class="zzscs-small-btn" style="display:none;">取消編輯</button>
+                    <input type="hidden" id="zz-category-edit-id" value="">
+                </div>
+                <div id="zz-category-msg"></div>
+            </div>
+            <div class="zzscs-account-manage-table-wrap">
+                <table class="zzscs-account-manage-table">
+                    <thead><tr><th>科目名稱</th><th>收支類型</th><th>狀態</th><th>操作</th></tr></thead>
+                    <tbody id="zz-category-manage-tbody"><tr><td colspan="4">讀取中...</td></tr></tbody>
+                </table>
+                <div id="zz-category-table-msg"></div>
+            </div>
+        </div>
+
+        <div class="zzscs-list" id="zz-sec-list">
+            <h3>最近記帳資料</h3>
+            <div class="zzscs-filter">
+                <div class="zzscs-filter-item"><label for="zz-filter-start">日期起</label><input type="date" id="zz-filter-start"></div>
+                <div class="zzscs-filter-item"><label for="zz-filter-end">日期迄</label><input type="date" id="zz-filter-end"></div>
+                <div class="zzscs-filter-item zzscs-filter-keyword"><label for="zz-filter-keyword">搜尋</label><input type="text" id="zz-filter-keyword" placeholder="摘要 / 科目 / 帳戶 / 備註" autocomplete="off"></div>
+                <div class="zzscs-filter-item"><label for="zz-filter-limit">筆數</label><select id="zz-filter-limit"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></div>
+                <div class="zzscs-filter-item"><label for="zz-filter-order">排序</label><select id="zz-filter-order"><option value="desc">最新</option><option value="asc">最舊</option></select></div>
+                <div class="zzscs-filter-actions">
+                    <button type="button" id="zz-filter-btn" class="zzscs-small-btn primary">搜尋</button>
+                    <button type="button" id="zz-filter-clear" class="zzscs-small-btn">清除</button>
+                    <button type="button" id="zz-export-csv" class="zzscs-small-btn">匯出CSV</button>
+                </div>
+            </div>
+            <table>
+                <thead><tr><th>日期</th><th>帳戶</th><th>科目</th><th>摘要</th><th>收入</th><th>支出</th><th>備註</th><th>操作</th></tr></thead>
+                <tbody id="zz-tbody"><tr><td colspan="8">讀取中...</td></tr></tbody>
+            </table>
+        </div>
+        
+        <?php endif; ?>
+    </div>
+    <?php
+    return ob_get_clean();
+}
+
