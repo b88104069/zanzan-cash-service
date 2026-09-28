@@ -1,0 +1,32 @@
+{
+  "name": "@zanzan-cash-service/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone core domain for the Zanzan Cash Service migration (Gate 2). No WordPress/WooCommerce dependency by design.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "dev": "tsx watch src/http/server.ts",
+    "start": "node dist/http/server.js",
+    "migrate:dryrun": "tsx scripts/migration/migrate.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "dotenv": "^18.0.4",
+    "prisma": "^6.19.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "dependencies": {
+    "@fastify/jwt": "^10.2.2",
+    "@prisma/client": "^6.19.3",
+    "fastify": "^5.1.0"
+  }
+}

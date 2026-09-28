@@ -1,0 +1,165 @@
+// Prisma schema for the standalone Cash Service.
+//
+// Table/column choices follow docs/architecture/database-strategy.md:
+// MySQL retained (not switched to Postgres), legacy wp_ prefix dropped,
+// the five legacy tables carried over close to 1:1, plus a new `users`
+// table (Gate 3 — standalone identity, replacing WordPress user records).
+// `updated_at` is added where the legacy schema only had `created_at`
+// (additive, not a parity change — see database-strategy.md).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  member
+  platform_admin
+
+  @@map("user_role")
+}
+
+enum RowStatus {
+  active
+  inactive
+
+  @@map("row_status")
+}
+
+enum CategoryType {
+  income
+  expense
+
+  @@map("category_type")
+}
+
+enum TenantRole {
+  owner
+
+  @@map("tenant_role")
+}
+
+/// Standalone identity — replaces WordPress user records (Gate 1
+/// wordpress-dependency-inventory.md: auth mechanism deprecated, auth
+/// concept kept).
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(member)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  ownedTenants Tenant[]           @relation("TenantOwner")
+  memberships  TenantMembership[]
+  cashEntries  CashEntry[]
+
+  @@map("users")
+}
+
+model Tenant {
+  id           String    @id @default(cuid())
+  companyName  String    @map("company_name") @db.VarChar(200)
+  ownerUserId  String    @map("owner_user_id")
+  planCode     String    @default("simple-cash-saas") @map("plan_code") @db.VarChar(50)
+  status       RowStatus @default(active)
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  owner       User               @relation("TenantOwner", fields: [ownerUserId], references: [id])
+  memberships TenantMembership[]
+  accounts    Account[]
+  categories  Category[]
+  entries     CashEntry[]
+
+  @@index([ownerUserId])
+  @@index([status])
+  @@map("tenants")
+}
+
+/// Parity source: zz_tenant_users.
+model TenantMembership {
+  id         String     @id @default(cuid())
+  tenantId   String     @map("tenant_id")
+  userId     String     @map("user_id")
+  tenantRole TenantRole @default(owner) @map("tenant_role")
+  status     RowStatus  @default(active)
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@index([status])
+  @@map("tenant_memberships")
+}
+
+/// Parity source: zz_cash_accounts.
+model Account {
+  id              String    @id @default(cuid())
+  tenantId        String    @map("tenant_id")
+  accountName     String    @map("account_name") @db.VarChar(100)
+  accountType     String    @default("cash") @map("account_type") @db.VarChar(50)
+  openingBalance  Decimal   @default(0) @map("opening_balance") @db.Decimal(14, 2)
+  status          RowStatus @default(active)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id])
+  entries CashEntry[]
+
+  @@unique([tenantId, accountName])
+  @@index([status])
+  @@map("cash_accounts")
+}
+
+/// Parity source: zz_cash_categories.
+model Category {
+  id           String       @id @default(cuid())
+  tenantId     String       @map("tenant_id")
+  categoryName String       @map("category_name") @db.VarChar(100)
+  categoryType CategoryType @map("category_type")
+  status       RowStatus    @default(active)
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, categoryName, categoryType])
+  @@index([categoryType])
+  @@index([status])
+  @@map("cash_categories")
+}
+
+/// Parity source: zz_cash_entries. `category` is a free-text string, not a
+/// foreign key to Category — deliberately preserved per Gate 2's decision
+/// (see docs/architecture/domain-boundaries.md → Category).
+model CashEntry {
+  id           String   @id @default(cuid())
+  tenantId     String   @map("tenant_id")
+  entryDate    DateTime @map("entry_date") @db.Date
+  memo         String   @db.VarChar(200)
+  category     String   @db.VarChar(100)
+  accountId    String   @map("account_id")
+  income       Decimal  @default(0) @db.Decimal(14, 2)
+  expense      Decimal  @default(0) @db.Decimal(14, 2)
+  note         String?  @db.Text
+  transferCode String?  @map("transfer_code") @db.VarChar(50)
+  createdBy    String   @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  account Account @relation(fields: [accountId], references: [id])
+  creator User    @relation(fields: [createdBy], references: [id])
+
+  @@index([tenantId])
+  @@index([entryDate])
+  @@index([accountId])
+  @@index([createdBy])
+  @@index([transferCode])
+  @@map("cash_entries")
+}

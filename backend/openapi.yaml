@@ -1,0 +1,444 @@
+openapi: 3.0.3
+info:
+  title: Zanzan Cash Service API
+  version: "1.0"
+  description: >
+    Standalone API for the Zanzan Cash Service migration (Gate 3). Replaces
+    the legacy WordPress REST namespace `zanzan-erp/v1`. See
+    docs/architecture/api-contract-principles.md for the ground rules this
+    contract follows (explicit tenant context, uniform auth envelope,
+    structured error codes, no business logic in controllers).
+servers:
+  - url: /api/v1
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Unauthenticated:
+      description: No or invalid JWT (UNAUTHENTICATED)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotEntitled:
+      description: Authenticated but no active entitlement (NOT_ENTITLED)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    TenantIsolation:
+      description: Missing/invalid tenant context, or not a member of the given tenant (INVALID_TENANT_CONTEXT / TENANT_MEMBERSHIP_REQUIRED)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  parameters:
+    TenantId:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      description: >
+        Explicit tenant context for this request (docs/architecture/api-contract-principles.md
+        #2). Never inferred from server-side session state.
+      schema:
+        type: string
+  schemas:
+    Error:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        code:
+          type: string
+          description: Stable machine-readable error code (see docs/architecture/api-contract-principles.md #6)
+        message:
+          type: string
+    Tenant:
+      type: object
+      properties:
+        id: { type: string }
+        companyName: { type: string }
+        ownerUserId: { type: string }
+        planCode: { type: string }
+        status: { type: string, enum: [active, inactive] }
+        createdAt: { type: string, format: date-time }
+    Account:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        accountName: { type: string }
+        accountType: { type: string }
+        openingBalance: { type: number }
+        status: { type: string, enum: [active, inactive] }
+        createdAt: { type: string, format: date-time }
+    AccountSummary:
+      type: object
+      properties:
+        id: { type: string }
+        accountName: { type: string }
+        totalIncome: { type: number }
+        totalExpense: { type: number }
+        balance: { type: number }
+    Category:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        categoryName: { type: string }
+        categoryType: { type: string, enum: [income, expense] }
+        status: { type: string, enum: [active, inactive] }
+    CashEntry:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        entryDate: { type: string, format: date }
+        memo: { type: string }
+        category: { type: string }
+        accountId: { type: string }
+        income: { type: number }
+        expense: { type: number }
+        note: { type: string }
+        transferCode: { type: string, nullable: true }
+    CashEntryInput:
+      type: object
+      required: [date, memo, category, account, income, expense]
+      properties:
+        date: { type: string, format: date }
+        memo: { type: string }
+        category: { type: string }
+        account: { type: string }
+        income: { type: number }
+        expense: { type: number }
+        note: { type: string }
+    Summary:
+      type: object
+      properties:
+        status: { type: string }
+        incomeTotal: { type: number }
+        expenseTotal: { type: number }
+        balance: { type: number }
+        monthIncome: { type: number }
+        monthExpense: { type: number }
+        monthBalance: { type: number }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      summary: Register a new standalone user account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '201': { description: Registered, returns a JWT }
+        '400': { description: Validation error or email already registered, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/login:
+    post:
+      summary: Log in and receive a JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { description: Logged in, returns a JWT }
+        '401': { description: Invalid credentials, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /tenants:
+    get:
+      summary: List tenants the authenticated user belongs to
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  data: { type: array, items: { $ref: '#/components/schemas/Tenant' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/NotEntitled' }
+    post:
+      summary: Create a new tenant (seeds default account + categories)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [companyName]
+              properties:
+                companyName: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string }, data: { $ref: '#/components/schemas/Tenant' } }
+        '400': { description: Duplicate tenant name or validation error }
+
+  /accounts:
+    get:
+      summary: List active account names for the current tenant (dropdown use)
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '200': { description: OK }
+        '403': { $ref: '#/components/responses/TenantIsolation' }
+    post:
+      summary: Create an account
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountName]
+              properties:
+                accountName: { type: string }
+                accountType: { type: string }
+                openingBalance: { type: number }
+      responses:
+        '201': { description: Created }
+
+  /accounts/admin:
+    get:
+      summary: Full account list (including inactive), for the account management screen
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string }, data: { type: array, items: { $ref: '#/components/schemas/Account' } } }
+
+  /accounts/summary:
+    get:
+      summary: Per-account balances
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string }, data: { type: array, items: { $ref: '#/components/schemas/AccountSummary' } } }
+
+  /accounts/{id}:
+    put:
+      summary: Update an account
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountName]
+              properties: { accountName: { type: string }, accountType: { type: string }, openingBalance: { type: number } }
+      responses:
+        '200': { description: Updated }
+
+  /accounts/{id}/disable:
+    post:
+      summary: Soft-disable an account
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Disabled } }
+
+  /accounts/{id}/enable:
+    post:
+      summary: Re-enable an account
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Enabled } }
+
+  /categories:
+    get:
+      summary: List active categories for the current tenant (dropdown use)
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses: { '200': { description: OK } }
+    post:
+      summary: Create a category
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [categoryName]
+              properties: { categoryName: { type: string }, categoryType: { type: string, enum: [income, expense] } }
+      responses: { '201': { description: Created } }
+
+  /categories/admin:
+    get:
+      summary: Full category list (including inactive)
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string }, data: { type: array, items: { $ref: '#/components/schemas/Category' } } }
+
+  /categories/{id}:
+    put:
+      summary: Update a category
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [categoryName]
+              properties: { categoryName: { type: string }, categoryType: { type: string, enum: [income, expense] } }
+      responses: { '200': { description: Updated } }
+
+  /categories/{id}/disable:
+    post:
+      summary: Soft-disable a category
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Disabled } }
+
+  /categories/{id}/enable:
+    post:
+      summary: Re-enable a category
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Enabled } }
+
+  /cash-entries:
+    get:
+      summary: List cash entries, filtered/sorted
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: start_date, in: query, schema: { type: string, format: date } }
+        - { name: end_date, in: query, schema: { type: string, format: date } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+        - { name: limit, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string }, data: { type: array, items: { $ref: '#/components/schemas/CashEntry' } } }
+    post:
+      summary: Create a cash entry (income XOR expense)
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CashEntryInput' }
+      responses:
+        '201': { description: Created }
+        '400': { description: 'Validation error (e.g. INCOME_EXPENSE_MUTUAL_EXCLUSION, CATEGORY_NOT_FOUND_OR_INACTIVE)' }
+
+  /cash-entries/summary:
+    get:
+      summary: Lifetime and month-to-date totals (transfers excluded)
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Summary' }
+
+  /cash-entries/export:
+    get:
+      summary: CSV export using the same filters as the list endpoint
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: start_date, in: query, schema: { type: string, format: date } }
+        - { name: end_date, in: query, schema: { type: string, format: date } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+      responses:
+        '200':
+          description: CSV file
+          content:
+            text/csv: { schema: { type: string } }
+
+  /cash-entries/{id}:
+    put:
+      summary: Update a cash entry (rejected if it is a transfer leg)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CashEntryInput' }
+      responses:
+        '200': { description: Updated }
+        '409': { description: ENTRY_TRANSFER_IMMUTABLE }
+    delete:
+      summary: Delete a cash entry (deletes both legs atomically if it's a transfer)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+        '404': { description: ENTRY_NOT_FOUND }
+        '409': { description: TRANSFER_INTEGRITY_VIOLATION }
+
+  /transfers:
+    post:
+      summary: Create a transfer between two accounts (inserts two linked entries atomically)
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, from_account, to_account, amount]
+              properties:
+                date: { type: string, format: date }
+                from_account: { type: string }
+                to_account: { type: string }
+                amount: { type: number }
+                note: { type: string }
+      responses:
+        '201': { description: Created }
+        '400': { description: 'TRANSFER_SAME_ACCOUNT or TRANSFER_INVALID_AMOUNT' }
+        '404': { description: TRANSFER_ACCOUNT_UNAVAILABLE }

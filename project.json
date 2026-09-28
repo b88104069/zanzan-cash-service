@@ -1,0 +1,133 @@
+{
+  "project": "zanzan-cash-service-migration",
+  "version": "1.0",
+  "contract": "docs/gates/kickoff-contract.md",
+  "legacySnapshot": {
+    "plugin": "zanzan-simple-cash-saas",
+    "version": "1.8.33",
+    "source": "docs/migration/zanzan-simple-cash-saas_1-8-33_合併原始碼.txt"
+  },
+  "repository": {
+    "full_name": "b88104069/zanzan-cash-service",
+    "stableBranch": "main",
+    "executionBranch": "migration/v1"
+  },
+  "gates": [
+    {
+      "id": 1,
+      "name": "Project Contract + Architecture Freeze",
+      "status": "not_separately_reviewed",
+      "note": "Never submitted for its own Gate Review; owner authorized proceeding to Gate 2 directly. Validated in substance by Gate 2's review (KEEP notes endorse Gate 1's concepts).",
+      "outputs": [
+        "CLAUDE.md",
+        "project.json",
+        "docs/architecture/",
+        "docs/gates/",
+        "reports/gate-1-delta-report.md"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Characterization Tests + Standalone Core",
+      "status": "passed",
+      "review": {
+        "channel": "slack",
+        "chatgptStatus": "PASS",
+        "mustFix": "NONE",
+        "threadUrl": "https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790567339921299",
+        "verifiedBy": "slack_read_thread sender-identity check (ChatGPT Slack app)"
+      },
+      "dependsOn": [1],
+      "outputs": [
+        "backend/src/domain/",
+        "backend/src/infra/memory/",
+        "backend/test/",
+        "reports/gate-2-delta-report.md"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Standalone API + Identity / Entitlement Boundary",
+      "status": "passed",
+      "review": {
+        "channel": "slack",
+        "chatgptStatus": "PASS",
+        "mustFix": "NONE",
+        "threadUrl": "https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790574063022069",
+        "verifiedBy": "slack_read_thread sender-identity check (ChatGPT Slack app)"
+      },
+      "dependsOn": [2],
+      "outputs": [
+        "backend/prisma/",
+        "backend/src/http/",
+        "backend/src/infra/prisma/",
+        "backend/src/infra/entitlement/",
+        "backend/src/domain/entitlement/",
+        "backend/openapi.yaml",
+        "backend/test/http/",
+        "backend/test/integration/",
+        "reports/gate-3-delta-report.md"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Standalone Frontend + Migration Parity",
+      "status": "passed",
+      "review": {
+        "channel": "slack",
+        "chatgptStatus": "PASS",
+        "mustFix": "NONE",
+        "threadUrl": "https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790575722689789",
+        "verifiedBy": "slack_read_thread sender-identity check (ChatGPT Slack app)"
+      },
+      "dependsOn": [3],
+      "outputs": [
+        "frontend/",
+        "backend/scripts/migration/",
+        "docs/architecture/category-decision.md",
+        "reports/gate-4-delta-report.md"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Public Prototype Deployment",
+      "formerName": "Google Cloud Staging + End-to-End Freeze",
+      "status": "passed",
+      "note": "Rescoped by the project owner after the original Gate 5's GCP-access HUMAN REVIEW block: no GCP for v1.0. GitHub Pages + browser-side (localStorage/IndexedDB) persistence, single test user, no login, no backend server, no multi-tenant isolation. See docs/gates/kickoff-contract.md 'Gate 5 (ACTIVE)' section for the full contract. First submission came back CONDITIONAL PASS pending live-URL + real-deployed-URL E2E evidence; both were resolved and a closure delta resubmitted, which received Final PASS.",
+      "deploymentUrl": "https://b88104069.github.io/zanzan-cash-service/",
+      "review": {
+        "channel": "slack",
+        "chatgptStatus": "PASS",
+        "mustFix": "NONE",
+        "threadUrl": "https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790588456279109",
+        "finalReviewMessageTs": "1790598788.252539",
+        "verifiedBy": "slack_read_thread sender-identity check (ChatGPT Slack app)"
+      },
+      "dependsOn": [4],
+      "terminalMarker": "v1.0 MIGRATION BASELINE FROZEN",
+      "terminalMarkerReached": true
+    }
+  ],
+  "status": "CLOSED",
+  "closedNote": "Gate 5 received Final PASS from Gate Review. v1.0 MIGRATION BASELINE FROZEN. No Gate 6 exists — this project is complete.",
+  "outOfScope": [
+    "new-advanced-financial-features",
+    "ai-bookkeeping",
+    "ocr-invoice-recognition",
+    "new-reporting-product-lines",
+    "mobile-app",
+    "production-cutover",
+    "production-woocommerce-migration",
+    "real-membership-data-migration",
+    "real-customer-bookkeeping-data-migration",
+    "removing-original-wordpress-plugin"
+  ],
+  "domains": [
+    "Tenant",
+    "Account",
+    "Category",
+    "CashEntry",
+    "Transfer",
+    "Entitlement"
+  ]
+}
