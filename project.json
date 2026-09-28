@@ -72,7 +72,14 @@
     {
       "id": 4,
       "name": "Standalone Frontend + Migration Parity",
-      "status": "awaiting_review",
+      "status": "passed",
+      "review": {
+        "channel": "slack",
+        "chatgptStatus": "PASS",
+        "mustFix": "NONE",
+        "threadUrl": "https://w1790566585-i2d716150.slack.com/archives/C0C4P9C6JF5/p1790575722689789",
+        "verifiedBy": "slack_read_thread sender-identity check (ChatGPT Slack app)"
+      },
       "dependsOn": [3],
       "outputs": [
         "frontend/",
@@ -84,7 +91,8 @@
     {
       "id": 5,
       "name": "Google Cloud Staging + End-to-End Freeze",
-      "status": "pending",
+      "status": "blocked_needs_human",
+      "note": "Requires the project owner to provide/confirm a GCP project, billing, and access before any real cloud resource is created — per kickoff-contract.md HUMAN REVIEW condition #2 (production credentials / secure access). Not proceeding on GCP provisioning without this.",
       "dependsOn": [4],
       "terminalMarker": "v1.0 MIGRATION BASELINE FROZEN"
     }
