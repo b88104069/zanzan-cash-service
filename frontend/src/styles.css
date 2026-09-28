@@ -313,6 +313,25 @@ th {
   }
 }
 
+.module-switcher {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 16px 24px 0;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.module-tab {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.module-tab.active {
+  background: #2563eb;
+  color: #fff;
+}
+
 .debug-panel {
   border: 1px dashed #94a3b8;
   border-radius: 12px;

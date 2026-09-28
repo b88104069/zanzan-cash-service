@@ -1,0 +1,24 @@
+// Accounting Module's own error type — deliberately NOT sharing Cash
+// Module's DomainError/DomainErrorCode (backend/src/domain/errors.ts),
+// which is frozen v1.0 baseline. Keeping error types separate mirrors the
+// rest of the module's isolation (own types, own storage, own services).
+
+export type AccountingErrorCode =
+  | 'CHART_OF_ACCOUNT_NOT_FOUND'
+  | 'MAPPING_NOT_FOUND'
+  | 'DUPLICATE_ACCOUNT_MAPPING'
+  | 'DUPLICATE_CATEGORY_MAPPING'
+  | 'CASH_ENTRY_NOT_MAPPED'
+  | 'CASH_ENTRY_EXCLUDED'
+  | 'CASH_ENTRY_ALREADY_JOURNALED'
+  | 'JOURNAL_ENTRY_NOT_BALANCED';
+
+export class AccountingError extends Error {
+  readonly code: AccountingErrorCode;
+
+  constructor(code: AccountingErrorCode, message: string) {
+    super(message);
+    this.name = 'AccountingError';
+    this.code = code;
+  }
+}
