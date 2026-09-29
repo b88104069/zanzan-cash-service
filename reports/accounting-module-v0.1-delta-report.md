@@ -273,3 +273,43 @@ validation. `feature/accounting-module` remains unmerged, pending the
 project owner's explicit merge decision — not automatically opened as a
 PR despite ChatGPT's earlier suggestion, per this Gate's own no-auto-merge
 instruction.
+
+---
+
+[Merge Decision] — Option B: keep as feature branch
+
+The project owner independently reviewed the full thread (plan, revised
+plan, implementation Delta Report, and this deployment-validation Delta
+Report) and issued their own review judgment, matching ChatGPT's PASS:
+
+> STATUS: PASS, MUST FIX: NONE, Deployment Validation: PASS, Merge: WAIT
+
+**Decision: Option B — do not merge `feature/accounting-module` into
+`main`.** Rationale, in the owner's own words: Accounting Module v0.1 is
+closer to "the first financial-core module prototype" than a simple UI
+addition. It's expected to grow further — a complete Chart of Accounts
+design, financial statement models, tax logic, fiscal periods — before a
+merge makes sense. Keeping it as a feature branch fits this project's
+management style for larger engineering efforts: prove the new module out
+fully, then merge once, rather than merging early and iterating on `main`.
+
+This is a process choice, not a technical blocker — the module itself is
+already fully evaluated as PASS at both the implementation and deployment
+layers.
+
+CURRENT STATE (final, this Gate)
+```
+main
+ └── Cash Service v1.0 (frozen, unchanged)
+     https://b88104069.github.io/zanzan-cash-service/
+
+feature/accounting-module
+ └── Accounting Module Prototype v0.1 (PASS, unmerged)
+     https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/
+```
+
+No further action needed on this branch unless/until the project owner
+either (a) asks to proceed with additional Accounting Module scope
+(reports, vouchers printing, P&L, balance sheet, import tooling) on the
+same branch, or (b) decides to merge. Both `main` and
+`feature/accounting-module` stay pushed and reviewable at any time.
