@@ -179,3 +179,79 @@ GATE REVIEW RESULT
   Option B decision. No merge action taken or proposed.
 
 **VERDICT: Accounting Module v0.2 (Financial Statements) — implementation PASS.**
+
+---
+
+[Accounting Module v0.2 — Prototype Deployment Validation] (closure delta)
+
+Requested by the project owner as a follow-up to the implementation PASS
+and the reviewer's non-blocking suggestion in the same review, to confirm
+the already-approved code behaves identically once actually deployed.
+
+WHAT WAS BUILT
+Nothing new. The v0.2 implementation commit (`53fc41c`, `frontend/**`
+changes) already matched the existing
+`.github/workflows/deploy-pages-preview.yml` trigger path (push to
+`feature/accounting-module` touching `frontend/**`), so it had already
+built and deployed automatically — confirmed via GitHub Actions run
+`36512369317` (workflow "Deploy Accounting Module v0.1 preview to GitHub
+Pages", run #3, `conclusion: success`, head commit `53fc41c`). The
+existing `playwright.preview.config.ts` from the v0.1 closure delta
+already pointed at the correct preview subpath and needed no changes —
+it runs whatever specs are in `e2e/`, so `financialStatements.spec.ts`
+was picked up automatically alongside the two v0.1-era specs.
+
+PREVIEW URL
+**https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/**
+(production root, https://b88104069.github.io/zanzan-cash-service/,
+confirmed unchanged and still HTTP 200)
+
+```
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/
+200
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/
+200
+```
+
+TEST / EVIDENCE
+```
+$ npx playwright test --config=playwright.preview.config.ts
+...
+2 passed (1.7m)
+1 flaky (e2e/parity.spec.ts)
+```
+All three specs — `e2e/parity.spec.ts` (Gate 5, 18 steps), `e2e/accounting.spec.ts`
+(v0.1, `#/cash` + `#/accounting` checklist), and `e2e/financialStatements.spec.ts`
+(v0.2, Trial Balance/Income Statement/Balance Sheet) — ran against the
+real deployed preview URL through the environment's real Chromium.
+`accounting.spec.ts` and `financialStatements.spec.ts` passed clean on
+every attempted run. `parity.spec.ts` hit this sandbox's own
+egress-proxy flakiness (`ERR_TOO_MANY_RETRIES`, and once a `h2` locator
+timeout on a slow initial paint) across several runs — the same
+pre-existing, already-documented sandbox limitation recorded in both the
+Gate 5 closure delta and the v0.1 deployment-validation closure delta,
+not a defect in the deployed app. Its final status was `passed` (with a
+flaky retry) on the run recorded above; `playwright.preview.config.ts`'s
+existing `retries: 2` handles this the same way it did for v0.1.
+
+The `financialStatements.spec.ts` real-browser run against the deployed
+build confirms the same figures as the local evidence in this report's
+implementation section: mapped income (¥30,000) + expense (¥5,000) →
+Trial Balance ending balances (庫存現金 ¥25,000, 一般收入科目 ¥30,000,
+餐費支出 ¥5,000) with period debit = period credit; Income Statement
+matching revenue/expense/net income; Balance Sheet Assets (¥25,000) =
+Liabilities + Equity + Current Earnings (¥25,000); GL-only limitation
+notice visible; Cash Module dashboard unaffected — all against the real
+deployed GitHub Pages build, not just the local dev server.
+
+DEVIATIONS
+None. This closure delta adds no new files and no code changes — it only
+runs the existing preview deployment/test tooling (already built for
+v0.1) against the new v0.2 build that was already live from the ordinary
+push-triggered deploy.
+
+REQUEST
+This completes the project owner's requested v0.2 prototype deployment
+validation. `feature/accounting-module` remains unmerged, pending the
+project owner's own merge decision — no PR opened, no merge action
+taken.
