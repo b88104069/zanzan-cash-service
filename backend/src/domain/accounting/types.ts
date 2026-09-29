@@ -140,6 +140,8 @@ export interface TrialBalanceReport {
   tenantId: string;
   fromDate?: string;
   asOfDate: string;
+  /** Echoed only when the report was resolved from a FiscalPeriod (v0.3); undefined for an explicit-date query. */
+  fiscalPeriodId?: string;
   lines: TrialBalanceLine[];
   totalPeriodDebit: number;
   totalPeriodCredit: number;
@@ -159,6 +161,8 @@ export interface IncomeStatementReport {
   tenantId: string;
   fromDate?: string;
   toDate: string;
+  /** Echoed only when the report was resolved from a FiscalPeriod (v0.3); undefined for an explicit-date query. */
+  fiscalPeriodId?: string;
   revenueLines: IncomeStatementLine[];
   expenseLines: IncomeStatementLine[];
   totalRevenue: number;
@@ -180,6 +184,8 @@ export interface BalanceSheetLine {
 export interface BalanceSheetReport {
   tenantId: string;
   asOfDate: string;
+  /** Echoed only when the report was resolved from a FiscalPeriod (v0.3); undefined for an explicit-date query. */
+  fiscalPeriodId?: string;
   assetLines: BalanceSheetLine[];
   liabilityLines: BalanceSheetLine[];
   equityLines: BalanceSheetLine[];
@@ -191,4 +197,35 @@ export interface BalanceSheetReport {
   /** totalLiabilities + totalEquity + currentEarnings — should equal totalAssets within GL-reflected scope. */
   totalLiabilitiesAndEquity: number;
   limitationNotice: string;
+}
+
+// --- Accounting Module v0.3 — Fiscal Period + Close Lock ---
+//
+// A Fiscal Period is a named, non-overlapping (per tenant) date range that
+// can be closed to lock further journalization within it. v0.3 is
+// deliberately narrow — see docs/architecture/accounting-module-v0.3.md and
+// the Slack Gate Review thread that approved this plan:
+//   - create / list / close only; NO reopen (closing is one-directional).
+//   - closing sets a lock flag only; it NEVER posts a closing JournalEntry,
+//     never touches retained earnings, never mutates GL data.
+//   - the lock only blocks NEW journalization (JournalEntryService has no
+//     update/delete surface in this codebase, so "no modify" is already
+//     true by construction — not something this Gate needs to add).
+//   - financial statements may optionally resolve their dates from a
+//     FiscalPeriod (fiscalPeriodId) instead of explicit dates, but the
+//     resolution is a single source of truth (see TrialBalance/
+//     IncomeStatement/BalanceSheetService) — never a second calculation.
+
+export type FiscalPeriodStatus = 'open' | 'closed';
+
+/** A tenant-scoped accounting period. Periods must not overlap another period of the same tenant; gaps (dates covered by no period) are allowed and unaffected by any close. */
+export interface FiscalPeriod {
+  id: string;
+  tenantId: string;
+  name: string;
+  startDate: string; // ISO date, inclusive
+  endDate: string; // ISO date, inclusive; startDate <= endDate
+  status: FiscalPeriodStatus;
+  closedAt?: Date;
+  createdAt: Date;
 }

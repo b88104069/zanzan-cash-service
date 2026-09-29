@@ -1,23 +1,38 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAccountingServices } from '../../localdb/accounting/AccountingDataProvider.js';
-import type { IncomeStatementReport } from '../../../../backend/src/domain/accounting/types.js';
+import type { FiscalPeriod, IncomeStatementReport } from '../../../../backend/src/domain/accounting/types.js';
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function IncomeStatementView() {
+export function IncomeStatementView({ refreshKey }: { refreshKey?: number } = {}) {
   const accounting = useAccountingServices();
+  const [periods, setPeriods] = useState<FiscalPeriod[]>([]);
+  const [fiscalPeriodId, setFiscalPeriodId] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState(todayIso());
   const [report, setReport] = useState<IncomeStatementReport | null>(null);
 
+  useEffect(() => {
+    accounting.fiscalPeriodService.listFiscalPeriods(accounting.tenantId).then(setPeriods);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  function handleSelectPeriod(id: string) {
+    setFiscalPeriodId(id);
+    const period = periods.find((p) => p.id === id);
+    if (period) {
+      setFromDate(period.startDate);
+      setToDate(period.endDate);
+    }
+  }
+
   async function handleQuery(e: React.FormEvent) {
     e.preventDefault();
-    const result = await accounting.incomeStatementService.getIncomeStatement(accounting.tenantId, {
-      fromDate: fromDate || undefined,
-      toDate,
-    });
+    const result = fiscalPeriodId
+      ? await accounting.incomeStatementService.getIncomeStatement(accounting.tenantId, { fiscalPeriodId })
+      : await accounting.incomeStatementService.getIncomeStatement(accounting.tenantId, { fromDate: fromDate || undefined, toDate });
     setReport(result);
   }
 
@@ -26,12 +41,40 @@ export function IncomeStatementView() {
       <h3>損益表（Income Statement）</h3>
       <form className="filter-grid" onSubmit={handleQuery}>
         <div>
+          <label htmlFor="is-period">會計期間（選填）</label>
+          <select id="is-period" value={fiscalPeriodId} onChange={(e) => handleSelectPeriod(e.target.value)}>
+            <option value="">（不使用會計期間，自行輸入日期）</option>
+            {periods.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}（{p.startDate} ~ {p.endDate}）{p.status === 'closed' ? '已關帳' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
           <label htmlFor="is-from">起始日（選填）</label>
-          <input id="is-from" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          <input
+            id="is-from"
+            type="date"
+            value={fromDate}
+            onChange={(e) => {
+              setFiscalPeriodId('');
+              setFromDate(e.target.value);
+            }}
+          />
         </div>
         <div>
           <label htmlFor="is-to">截至日</label>
-          <input id="is-to" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} required />
+          <input
+            id="is-to"
+            type="date"
+            value={toDate}
+            onChange={(e) => {
+              setFiscalPeriodId('');
+              setToDate(e.target.value);
+            }}
+            required
+          />
         </div>
         <div className="actions">
           <button type="submit">查詢</button>

@@ -1,13 +1,22 @@
 import type { ChartOfAccountService } from './ChartOfAccountService.js';
+import type { FiscalPeriodService } from './FiscalPeriodService.js';
 import type { JournalEntryService } from './JournalEntryService.js';
 import { normalBalanceOf, normalize } from './accountPresentation.js';
 import { GL_ONLY_LIMITATION_NOTICE } from '../types.js';
 import type { TrialBalanceReport } from '../types.js';
 
 export interface TrialBalanceInput {
-  /** Omit for an as-of report (beginning balance = 0 for every account, i.e. "since inception through asOfDate"). */
+  /** Omit for an as-of report (beginning balance = 0 for every account, i.e. "since inception through asOfDate"). Ignored when fiscalPeriodId is given. */
   fromDate?: string;
-  asOfDate: string;
+  asOfDate?: string;
+  /**
+   * v0.3: resolve fromDate/asOfDate from a FiscalPeriod instead of explicit
+   * dates — fromDate = period.startDate, asOfDate = period.endDate.
+   * Identical result to passing those dates explicitly (single source of
+   * truth, never a second calculation). When given, fromDate/asOfDate above
+   * are ignored.
+   */
+  fiscalPeriodId?: string;
 }
 
 /**
@@ -21,9 +30,21 @@ export class TrialBalanceService {
   constructor(
     private readonly journalEntryService: JournalEntryService,
     private readonly chartOfAccountService: ChartOfAccountService,
+    private readonly fiscalPeriodService?: FiscalPeriodService,
   ) {}
 
   async getTrialBalance(tenantId: string, input: TrialBalanceInput): Promise<TrialBalanceReport> {
+    let fromDate = input.fromDate;
+    let asOfDate = input.asOfDate;
+    if (input.fiscalPeriodId !== undefined) {
+      const period = await this.fiscalPeriodService!.getFiscalPeriod(tenantId, input.fiscalPeriodId);
+      fromDate = period.startDate;
+      asOfDate = period.endDate;
+    }
+    if (asOfDate === undefined) {
+      throw new Error('TrialBalanceService.getTrialBalance requires either asOfDate or fiscalPeriodId');
+    }
+
     const [accounts, entries] = await Promise.all([
       this.chartOfAccountService.listChartOfAccounts(tenantId),
       this.journalEntryService.listJournalEntries(tenantId),
@@ -38,8 +59,8 @@ export class TrialBalanceService {
       let periodCredit = 0;
 
       for (const entry of entries) {
-        const beforePeriod = input.fromDate !== undefined && entry.entryDate < input.fromDate;
-        const withinPeriod = (input.fromDate === undefined || entry.entryDate >= input.fromDate) && entry.entryDate <= input.asOfDate;
+        const beforePeriod = fromDate !== undefined && entry.entryDate < fromDate;
+        const withinPeriod = (fromDate === undefined || entry.entryDate >= fromDate) && entry.entryDate <= asOfDate;
 
         for (const line of entry.lines) {
           if (line.chartOfAccountId !== account.id) continue;
@@ -71,8 +92,9 @@ export class TrialBalanceService {
 
     return {
       tenantId,
-      fromDate: input.fromDate,
-      asOfDate: input.asOfDate,
+      fromDate,
+      asOfDate,
+      fiscalPeriodId: input.fiscalPeriodId,
       lines,
       totalPeriodDebit,
       totalPeriodCredit,

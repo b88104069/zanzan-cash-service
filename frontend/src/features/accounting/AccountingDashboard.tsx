@@ -48,7 +48,8 @@ export function AccountingDashboard({ refreshKey, onProcessed }: { refreshKey: n
     const entries = await cash.cashEntryService.listEntries(cash.tenantId, {});
     const result = await accounting.journalEntryService.processPending(accounting.tenantId, entries);
     accounting.save();
-    setMessage(`已產生 ${result.journaled} 筆分錄（已略過：已存在 ${result.alreadyJournaled} 筆、待設定科目對應 ${result.unmapped} 筆、未處理轉帳 ${result.excluded} 筆）`);
+    const periodClosedNote = result.periodClosed > 0 ? `、期間已關帳，略過 ${result.periodClosed} 筆` : '';
+    setMessage(`已產生 ${result.journaled} 筆分錄（已略過：已存在 ${result.alreadyJournaled} 筆、待設定科目對應 ${result.unmapped} 筆、未處理轉帳 ${result.excluded} 筆${periodClosedNote}）`);
     onProcessed();
   }
 

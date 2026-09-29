@@ -1,4 +1,4 @@
-import type { AccountMapping, CategoryMapping, ChartOfAccount, JournalEntry, JournalLine, Voucher } from '../../../domain/accounting/types.js';
+import type { AccountMapping, CategoryMapping, ChartOfAccount, FiscalPeriod, JournalEntry, JournalLine, Voucher } from '../../../domain/accounting/types.js';
 
 let nextAccountingId = 1;
 /** Independent counter from the Cash Module's generateId (InMemoryDatabase.ts) — this module's ids never need to compare against or collide with Cash Module ids. */
@@ -18,4 +18,5 @@ export class AccountingDatabase {
   readonly journalEntries = new Map<string, JournalEntry>();
   readonly journalLines = new Map<string, JournalLine>();
   readonly vouchers = new Map<string, Voucher>();
+  readonly fiscalPeriods = new Map<string, FiscalPeriod>();
 }

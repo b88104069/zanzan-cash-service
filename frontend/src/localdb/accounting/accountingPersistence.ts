@@ -1,5 +1,5 @@
 import { AccountingDatabase, generateAccountingId } from '../../../../backend/src/infra/memory/accounting/AccountingDatabase.js';
-import type { AccountMapping, CategoryMapping, ChartOfAccount, JournalEntry, JournalLine, Voucher } from '../../../../backend/src/domain/accounting/types.js';
+import type { AccountMapping, CategoryMapping, ChartOfAccount, FiscalPeriod, JournalEntry, JournalLine, Voucher } from '../../../../backend/src/domain/accounting/types.js';
 
 // Mirrors frontend/src/localdb/persistence.ts's approach for the Cash
 // Module: reuse the Accounting Module's own backend classes as-is, add a
@@ -16,10 +16,15 @@ interface SerializedAccountingDb {
   journalEntries: JournalEntry[];
   journalLines: JournalLine[];
   vouchers: Voucher[];
+  fiscalPeriods: FiscalPeriod[];
 }
 
 function reviveDates<T extends { createdAt: Date | string }>(row: T): T {
   return { ...row, createdAt: new Date(row.createdAt) };
+}
+
+function reviveFiscalPeriod(row: FiscalPeriod): FiscalPeriod {
+  return { ...row, createdAt: new Date(row.createdAt), closedAt: row.closedAt ? new Date(row.closedAt) : undefined };
 }
 
 function loadFromStorage(): SerializedAccountingDb | null {
@@ -42,6 +47,7 @@ function warmUpIdCounter(db: AccountingDatabase): void {
     ...db.journalEntries.keys(),
     ...db.journalLines.keys(),
     ...db.vouchers.keys(),
+    ...db.fiscalPeriods.keys(),
   ];
   for (const id of allIds) {
     const match = /_(\d+)$/.exec(id);
@@ -61,6 +67,7 @@ export function loadAccountingDatabase(): AccountingDatabase {
     for (const row of saved.journalEntries) db.journalEntries.set(row.id, reviveDates(row));
     for (const row of saved.journalLines) db.journalLines.set(row.id, row);
     for (const row of saved.vouchers) db.vouchers.set(row.id, reviveDates(row));
+    for (const row of saved.fiscalPeriods ?? []) db.fiscalPeriods.set(row.id, reviveFiscalPeriod(row));
   }
 
   warmUpIdCounter(db);
@@ -75,6 +82,7 @@ export function saveAccountingDatabase(db: AccountingDatabase): void {
     journalEntries: [...db.journalEntries.values()],
     journalLines: [...db.journalLines.values()],
     vouchers: [...db.vouchers.values()],
+    fiscalPeriods: [...db.fiscalPeriods.values()],
   };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));

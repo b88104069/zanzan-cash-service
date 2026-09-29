@@ -1,9 +1,24 @@
 import type { ChartOfAccountService } from './ChartOfAccountService.js';
+import type { FiscalPeriodService } from './FiscalPeriodService.js';
 import type { IncomeStatementService } from './IncomeStatementService.js';
 import type { JournalEntryService } from './JournalEntryService.js';
 import { normalBalanceOf, normalize } from './accountPresentation.js';
 import { GL_ONLY_LIMITATION_NOTICE } from '../types.js';
 import type { BalanceSheetLine, BalanceSheetReport } from '../types.js';
+
+export interface BalanceSheetInput {
+  asOfDate?: string;
+  /**
+   * v0.3: resolve asOfDate from a FiscalPeriod — as-of = period.endDate
+   * ONLY. Balance Sheet is an as-of statement, not a range statement, so
+   * period.startDate is never used here. When given, asOfDate above is
+   * ignored. currentEarnings below still accumulates since inception
+   * through that endDate — fiscalPeriodId never narrows Current Earnings
+   * to just that period's activity (that would break the v0.2 balance
+   * invariant, since v0.1 posts no closing entries).
+   */
+  fiscalPeriodId?: string;
+}
 
 /**
  * Balance Sheet (資產負債表) — asset/liability/equity ChartOfAccounts as of
@@ -19,9 +34,22 @@ export class BalanceSheetService {
     private readonly journalEntryService: JournalEntryService,
     private readonly chartOfAccountService: ChartOfAccountService,
     private readonly incomeStatementService: IncomeStatementService,
+    private readonly fiscalPeriodService?: FiscalPeriodService,
   ) {}
 
-  async getBalanceSheet(tenantId: string, asOfDate: string): Promise<BalanceSheetReport> {
+  /** `asOfDateOrInput` accepts a plain ISO date (v0.2 explicit-date call, unchanged) or a v0.3 input object with fiscalPeriodId. */
+  async getBalanceSheet(tenantId: string, asOfDateOrInput: string | BalanceSheetInput): Promise<BalanceSheetReport> {
+    const input: BalanceSheetInput = typeof asOfDateOrInput === 'string' ? { asOfDate: asOfDateOrInput } : asOfDateOrInput;
+
+    let asOfDate = input.asOfDate;
+    if (input.fiscalPeriodId !== undefined) {
+      const period = await this.fiscalPeriodService!.getFiscalPeriod(tenantId, input.fiscalPeriodId);
+      asOfDate = period.endDate;
+    }
+    if (asOfDate === undefined) {
+      throw new Error('BalanceSheetService.getBalanceSheet requires either asOfDate or fiscalPeriodId');
+    }
+
     const [accounts, entries, incomeStatement] = await Promise.all([
       this.chartOfAccountService.listChartOfAccounts(tenantId),
       this.journalEntryService.listJournalEntries(tenantId),
@@ -61,6 +89,7 @@ export class BalanceSheetService {
     return {
       tenantId,
       asOfDate,
+      fiscalPeriodId: input.fiscalPeriodId,
       assetLines,
       liabilityLines,
       equityLines,
