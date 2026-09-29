@@ -234,3 +234,78 @@ GATE REVIEW RESULT
   decide.
 
 **VERDICT: Accounting Module v0.3 Fiscal Period + Close Lock — implementation PASS.**
+
+---
+
+[Accounting Module v0.3 — Prototype Deployment Validation] (closure delta)
+
+Requested by the project owner as a follow-up to the v0.3 implementation
+PASS and the reviewer's non-blocking suggestion in the same review, to
+confirm the already-approved code behaves identically once actually
+deployed.
+
+WHAT WAS BUILT
+Nothing new. The v0.3 implementation commit (`a1baf59`, `frontend/**`
+changes) already matched the existing
+`.github/workflows/deploy-pages-preview.yml` trigger path (push to
+`feature/accounting-module` touching `frontend/**`), so it had already
+built and deployed automatically — confirmed via GitHub Actions run
+`36588837561` (run #4, `conclusion: success`, head commit `a1baf59`). The
+existing `playwright.preview.config.ts` needed no changes — it runs
+whatever specs are in `e2e/`, so `fiscalPeriod.spec.ts` was picked up
+automatically alongside the v0.1/v0.2/Gate 5 specs.
+
+PREVIEW URL
+**https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/**
+(production root, https://b88104069.github.io/zanzan-cash-service/,
+confirmed unchanged and still HTTP 200)
+
+```
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/
+200
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/
+200
+```
+
+TEST / EVIDENCE
+```
+$ npx playwright test --config=playwright.preview.config.ts
+...
+3 passed (2.1m)
+1 flaky (e2e/parity.spec.ts)
+```
+All four specs — `e2e/accounting.spec.ts` (v0.1), `e2e/financialStatements.spec.ts`
+(v0.2), `e2e/fiscalPeriod.spec.ts` (v0.3, new), and `e2e/parity.spec.ts`
+(Gate 5) — ran against the real deployed preview URL through the
+environment's real Chromium. `accounting.spec.ts`, `financialStatements.spec.ts`,
+and `fiscalPeriod.spec.ts` passed clean on the first attempt.
+`parity.spec.ts` hit this sandbox's own egress-proxy flakiness
+(`ERR_TOO_MANY_RETRIES`) across two attempts before passing on retry #2 —
+the same pre-existing, already-documented sandbox limitation recorded in
+the Gate 5, v0.1, and v0.2 closure deltas, not a defect in the deployed
+app; `playwright.preview.config.ts`'s existing `retries: 2` handled it the
+same way it did for v0.1/v0.2.
+
+The `fiscalPeriod.spec.ts` real-browser run against the deployed build
+reproduces the same behavior as local evidence: two January entries
+journalized (¥20,000 income, ¥3,000 expense); a January fiscal period
+created and closed; a new January-dated ¥5,000 entry submitted afterward;
+"產生分錄" run again shows `已產生 0 筆分錄` with `期間已關帳，略過 1 筆`
+explicitly visible; Trial Balance via the fiscal-period selector shows
+庫存現金 ending ¥17,000 (blocked entry excluded) with period debit total =
+period credit total; Balance Sheet via the selector shows
+Assets = Liabilities + Equity + Current Earnings = ¥17,000; the GL-only
+limitation notice remains visible; all three Cash Module entries
+(including the blocked one) remain visible and untouched — all against
+the real deployed GitHub Pages build, not just the local dev server.
+
+DEVIATIONS
+None. This closure delta adds no new files and no code changes — it only
+runs the existing preview deployment/test tooling (already built for
+v0.1/v0.2) against the new v0.3 build that was already live from the
+ordinary push-triggered deploy.
+
+REQUEST
+This completes the project owner's requested v0.3 prototype deployment
+validation. `feature/accounting-module` remains unmerged — no PR opened,
+no merge action taken.
