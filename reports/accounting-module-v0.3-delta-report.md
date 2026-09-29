@@ -120,7 +120,11 @@ TEST / EVIDENCE
   counts the skipped one without aborting; repeated `processPending` stays
   idempotent and never re-classifies a historical entry as `periodClosed`;
   Trial Balance/Income Statement/Balance Sheet via `fiscalPeriodId`
-  produce byte-identical results to their explicit-date equivalents;
+  produce an accounting-result equivalent to the explicit-date query, with
+  `fiscalPeriodId` echoed only as selection metadata (dates, lines,
+  totals, and `currentEarnings` all match — the report object itself is
+  not byte-identical, since the `fiscalPeriodId` field is only present on
+  the period-resolved query);
   Balance Sheet Current Earnings verified cumulative since inception
   (including prior-period earnings) and the A=L+E+CE invariant holds under
   `fiscalPeriodId`; a snapshot test confirms fiscal-period
@@ -175,3 +179,58 @@ RISKS / KNOWN LIMITATIONS
 REQUEST
 Gate Review of this implementation via the same Slack `#ai-gate-test`
 pipeline used for v0.1 and v0.2.
+
+GATE REVIEW RESULT
+- **STATUS: PASS** — Slack `#ai-gate-test`, message ts `1790712960.487459`,
+  sender verified as the ChatGPT Slack app (`<@U0C5PSTQMEC>`).
+- Reviewer confirmed directly against GitHub: implementation commit
+  `a1baf59`, `FiscalPeriodService`, `JournalEntryService`, the 14
+  fiscal-period backend tests, `FiscalPeriodsView`, the v0.3 E2E spec, and
+  this Delta Report. Implementation matches the approved Revised Plan with
+  no blocking issues.
+- **MUST FIX: NONE.**
+- Verified: fiscal-period domain/tenant isolation (inclusive overlap
+  check, cross-tenant identical ranges allowed, list/get/close all
+  tenant-scoped, invalid range rejected, one-way close with
+  `FISCAL_PERIOD_ALREADY_CLOSED` on re-close, never a second closed
+  state); closed-period posting lock (inclusive boundary, entries outside
+  every period unaffected, direct `journalizeEntry` rejects with zero
+  JE/JL/Voucher writes, `processPending` classifies independently in the
+  approved order `alreadyJournaled → excluded → unmapped → periodClosed →
+  journaled`, and a historical entry re-run after its period closes still
+  counts as `alreadyJournaled`, never drifting into `periodClosed`);
+  statement `fiscalPeriodId` semantics exactly as specified (TB/IS resolve
+  `[start,end]`; BS uses `period.endDate` only; Current Earnings stays
+  cumulative since inception, verified via the prior-period-earnings
+  fixture; the v0.2 `Assets = Liabilities + Equity + Current Earnings`
+  invariant holds); no closing-entry mutation anywhere; persistence/UI/
+  regression evidence (fiscal periods persist with `closedAt` revival,
+  Dashboard shows the skip count explicitly, 85/85 backend tests, all 4
+  Playwright specs green, Cash Module core untouched).
+- **Documentation correction (non-blocking, applied in this report)**: the
+  original TEST/EVIDENCE wording "byte-identical results" was imprecise —
+  the `fiscalPeriodId`-resolved report object cannot be byte-identical to
+  the explicit-date one because it additionally echoes `fiscalPeriodId` as
+  selection metadata. Corrected above to describe accounting-result
+  equivalence (dates, lines, totals, `currentEarnings` all match) per the
+  reviewer's exact suggested phrasing. This is a documentation-precision
+  fix only; it does not change any code, test, or the PASS verdict.
+- Non-blocking note: `journalizeEntry`'s direct-call path checks
+  closed-period status before mapping classification, so a direct call on
+  an unmapped/excluded entry in a closed period returns
+  `JOURNAL_ENTRY_PERIOD_CLOSED` first. Reviewer confirmed this does not
+  violate the direct-call strict contract (the batch path already
+  preserves `excluded`/`unmapped` precedence per the approved order); a
+  unified error-precedence contract across both paths, if ever wanted, is
+  deferred as a separate future decision — not required for this Gate.
+- Reviewer's suggested next step (a v0.3 GitHub Pages preview-deployment
+  validation pass, mirroring v0.1/v0.2) is **not undertaken by this
+  Delta** — held for the project owner to decide before any further scope
+  is opened.
+- **`feature/accounting-module` remains unmerged.** This PASS is the v0.3
+  implementation Gate only; it does not itself authorize a merge to
+  `main`. Per the standing Option B decision, the next step (deployment
+  validation, v0.4, or a PR/merge decision) is for the project owner to
+  decide.
+
+**VERDICT: Accounting Module v0.3 Fiscal Period + Close Lock — implementation PASS.**
