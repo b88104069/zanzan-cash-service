@@ -156,7 +156,7 @@ describe('Accounting Module v0.1 — LedgerMappingService + JournalEntryService'
 
     const result = await h.journalEntryService.processPending('t1', entries);
     expect(result.excluded).toBe(2);
-    expect(await h.journalEntryService.getJournalEntryBySource('t1', transferEntries[0].id)).toBeNull();
+    expect(await h.journalEntryService.getJournalEntryBySource('t1', transferEntries[0]!.id)).toBeNull();
   });
 
   it('processPending is idempotent — a second run journals nothing new and reports alreadyJournaled', async () => {
@@ -193,8 +193,8 @@ describe('Accounting Module v0.1 — LedgerMappingService + JournalEntryService'
 
     const vouchers = await h.voucherService.listVouchers('t1');
     expect(vouchers).toHaveLength(1);
-    expect(vouchers[0].journalEntryIds).toEqual([journalEntry.id]);
-    expect(vouchers[0].voucherNo).toBe('JV00001');
+    expect(vouchers[0]!.journalEntryIds).toEqual([journalEntry.id]);
+    expect(vouchers[0]!.voucherNo).toBe('JV00001');
   });
 
   it('the whole accounting flow never mutates Cash Module data', async () => {

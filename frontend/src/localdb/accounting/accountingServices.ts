@@ -1,6 +1,9 @@
+import { BalanceSheetService } from '../../../../backend/src/domain/accounting/services/BalanceSheetService.js';
 import { ChartOfAccountService } from '../../../../backend/src/domain/accounting/services/ChartOfAccountService.js';
+import { IncomeStatementService } from '../../../../backend/src/domain/accounting/services/IncomeStatementService.js';
 import { JournalEntryService } from '../../../../backend/src/domain/accounting/services/JournalEntryService.js';
 import { LedgerMappingService } from '../../../../backend/src/domain/accounting/services/LedgerMappingService.js';
+import { TrialBalanceService } from '../../../../backend/src/domain/accounting/services/TrialBalanceService.js';
 import { VoucherService } from '../../../../backend/src/domain/accounting/services/VoucherService.js';
 import { InMemoryChartOfAccountRepository } from '../../../../backend/src/infra/memory/accounting/InMemoryChartOfAccountRepository.js';
 import { InMemoryJournalEntryRepository } from '../../../../backend/src/infra/memory/accounting/InMemoryJournalEntryRepository.js';
@@ -17,6 +20,9 @@ export interface AccountingServices {
   mappingService: LedgerMappingService;
   voucherService: VoucherService;
   journalEntryService: JournalEntryService;
+  trialBalanceService: TrialBalanceService;
+  incomeStatementService: IncomeStatementService;
+  balanceSheetService: BalanceSheetService;
   save: () => void;
 }
 
@@ -39,6 +45,9 @@ export async function initAccountingServices(cash: LocalServices): Promise<Accou
   const mappingService = new LedgerMappingService(mappingRepo);
   const voucherService = new VoucherService(voucherRepo);
   const journalEntryService = new JournalEntryService(journalEntryRepo, voucherService, mappingService);
+  const trialBalanceService = new TrialBalanceService(journalEntryService, chartOfAccountService);
+  const incomeStatementService = new IncomeStatementService(journalEntryService, chartOfAccountService);
+  const balanceSheetService = new BalanceSheetService(journalEntryService, chartOfAccountService, incomeStatementService);
 
   const save = () => saveAccountingDatabase(db);
 
@@ -48,7 +57,18 @@ export async function initAccountingServices(cash: LocalServices): Promise<Accou
     save();
   }
 
-  return { db, tenantId: cash.tenantId, chartOfAccountService, mappingService, voucherService, journalEntryService, save };
+  return {
+    db,
+    tenantId: cash.tenantId,
+    chartOfAccountService,
+    mappingService,
+    voucherService,
+    journalEntryService,
+    trialBalanceService,
+    incomeStatementService,
+    balanceSheetService,
+    save,
+  };
 }
 
 /**

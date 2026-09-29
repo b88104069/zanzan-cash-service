@@ -1,6 +1,9 @@
+import { BalanceSheetService } from '../../src/domain/accounting/services/BalanceSheetService.js';
 import { ChartOfAccountService } from '../../src/domain/accounting/services/ChartOfAccountService.js';
+import { IncomeStatementService } from '../../src/domain/accounting/services/IncomeStatementService.js';
 import { JournalEntryService } from '../../src/domain/accounting/services/JournalEntryService.js';
 import { LedgerMappingService } from '../../src/domain/accounting/services/LedgerMappingService.js';
+import { TrialBalanceService } from '../../src/domain/accounting/services/TrialBalanceService.js';
 import { VoucherService } from '../../src/domain/accounting/services/VoucherService.js';
 import { AccountingDatabase } from '../../src/infra/memory/accounting/AccountingDatabase.js';
 import { InMemoryChartOfAccountRepository } from '../../src/infra/memory/accounting/InMemoryChartOfAccountRepository.js';
@@ -23,6 +26,24 @@ export function createAccountingHarness() {
   const mappingService = new LedgerMappingService(mappingRepo);
   const voucherService = new VoucherService(voucherRepo);
   const journalEntryService = new JournalEntryService(journalEntryRepo, voucherService, mappingService);
+  const trialBalanceService = new TrialBalanceService(journalEntryService, chartOfAccountService);
+  const incomeStatementService = new IncomeStatementService(journalEntryService, chartOfAccountService);
+  const balanceSheetService = new BalanceSheetService(journalEntryService, chartOfAccountService, incomeStatementService);
 
-  return { ...cash, accountingDb: db, chartOfAccountService, mappingService, voucherService, journalEntryService };
+  return {
+    ...cash,
+    accountingDb: db,
+    chartOfAccountService,
+    mappingService,
+    voucherService,
+    journalEntryService,
+    trialBalanceService,
+    incomeStatementService,
+    balanceSheetService,
+    // Exposed for tests that need to construct a JournalEntry directly
+    // (e.g. an abnormal-balance scenario the normal Cash-mapping flow
+    // can't produce) — never used by product code, which only ever
+    // journalizes through JournalEntryService's mapping path.
+    journalEntryRepo,
+  };
 }

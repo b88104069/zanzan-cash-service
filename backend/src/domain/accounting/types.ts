@@ -95,3 +95,100 @@ export interface Voucher {
   journalEntryIds: string[];
   createdAt: Date;
 }
+
+// --- Accounting Module v0.2 — Financial Statements ---
+//
+// Trial Balance / Income Statement / Balance Sheet are all read-only
+// derivations over JournalEntry/JournalLine/ChartOfAccount — see
+// backend/src/domain/accounting/services/{TrialBalance,IncomeStatement,
+// BalanceSheet}Service.ts and docs/architecture/accounting-module-v0.2.md.
+// Approved by Gate Review (Slack #ai-gate-test) after a revision that
+// fixed two real accounting-correctness gaps in the first draft plan:
+// Trial Balance needed beginning/period/ending balances (not a bare
+// date-range activity sum), and Balance Sheet needed a presentation-only
+// Current Earnings line (v0.1 has no closing entries, so without this
+// Assets would not equal Liabilities + Equity).
+
+/** Every ChartOfAccount type has a "normal" side. A positive normalized balance means the account is in its normal direction; negative means reversed — never clamped away. */
+export type NormalBalanceSide = 'debit' | 'credit';
+
+/**
+ * The single, exact wording Gate Review required for every financial
+ * statement view — names the three concrete gaps (unmapped, excluded
+ * transfers, Cash Module opening balances) rather than a vague
+ * "GL-reflected only" disclaimer.
+ */
+export const GL_ONLY_LIMITATION_NOTICE =
+  '本報表僅反映已進入總帳（journalized）的交易；尚未設定科目對應、未處理轉帳，以及記帳模組帳戶的期初餘額均不包含在內，因此不代表 Cash Module 全部帳務餘額。';
+
+export interface TrialBalanceLine {
+  chartOfAccountId: string;
+  code: string;
+  name: string;
+  type: ChartOfAccountType;
+  normalBalance: NormalBalanceSide;
+  /** Normalized (positive = normal direction) balance immediately before fromDate; 0 when fromDate is omitted. */
+  beginningBalance: number;
+  /** Raw Σdebit / Σcredit within [fromDate, asOfDate] — never sign-flipped, always >= 0. */
+  periodDebit: number;
+  periodCredit: number;
+  /** Normalized ending balance = beginningBalance's raw value +/- period movement, then normalized. */
+  endingBalance: number;
+}
+
+export interface TrialBalanceReport {
+  tenantId: string;
+  fromDate?: string;
+  asOfDate: string;
+  lines: TrialBalanceLine[];
+  totalPeriodDebit: number;
+  totalPeriodCredit: number;
+  limitationNotice: string;
+}
+
+export interface IncomeStatementLine {
+  chartOfAccountId: string;
+  code: string;
+  name: string;
+  type: 'revenue' | 'expense';
+  /** Normalized (credit-normal for revenue, debit-normal for expense) amount over the period. */
+  amount: number;
+}
+
+export interface IncomeStatementReport {
+  tenantId: string;
+  fromDate?: string;
+  toDate: string;
+  revenueLines: IncomeStatementLine[];
+  expenseLines: IncomeStatementLine[];
+  totalRevenue: number;
+  totalExpense: number;
+  netIncome: number;
+  limitationNotice: string;
+}
+
+export interface BalanceSheetLine {
+  chartOfAccountId: string;
+  code: string;
+  name: string;
+  type: 'asset' | 'liability' | 'equity';
+  normalBalance: NormalBalanceSide;
+  /** Normalized (positive = normal direction) balance as of asOfDate. */
+  balance: number;
+}
+
+export interface BalanceSheetReport {
+  tenantId: string;
+  asOfDate: string;
+  assetLines: BalanceSheetLine[];
+  liabilityLines: BalanceSheetLine[];
+  equityLines: BalanceSheetLine[];
+  totalAssets: number;
+  totalLiabilities: number;
+  totalEquity: number;
+  /** Presentation-only: cumulativeRevenue - cumulativeExpense as of asOfDate, computed by IncomeStatementService — never a separate calculation. No closing JournalEntry is ever posted for this. */
+  currentEarnings: number;
+  /** totalLiabilities + totalEquity + currentEarnings — should equal totalAssets within GL-reflected scope. */
+  totalLiabilitiesAndEquity: number;
+  limitationNotice: string;
+}
