@@ -19,4 +19,9 @@ export class InMemoryChartOfAccountRepository implements ChartOfAccountRepositor
   async listByTenant(tenantId: string): Promise<ChartOfAccount[]> {
     return [...this.db.chartOfAccounts.values()].filter((r) => r.tenantId === tenantId);
   }
+
+  async update(account: ChartOfAccount): Promise<ChartOfAccount> {
+    this.db.chartOfAccounts.set(account.id, account);
+    return account;
+  }
 }

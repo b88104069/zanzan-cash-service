@@ -18,6 +18,12 @@ export function JournalEntryList({ refreshKey }: { refreshKey: number }) {
     return coa ? `${coa.code} ${coa.name}` : id;
   }
 
+  function sourceLabel(entry: JournalEntryWithLines): string {
+    if (entry.sourceType === 'manual' && entry.sourceModule === 'GL') return '人工過帳 (GL)';
+    if (entry.sourceType === 'module' && entry.sourceModule === 'CASH') return '記帳模組 (CASH)';
+    return `${entry.sourceType} (${entry.sourceModule})`;
+  }
+
   return (
     <section id="sec-journal-entries" className="panel">
       <h3>會計分錄（Journal Entries）</h3>
@@ -33,6 +39,7 @@ export function JournalEntryList({ refreshKey }: { refreshKey: number }) {
                 <th>借方科目</th>
                 <th>貸方科目</th>
                 <th>金額</th>
+                <th>來源</th>
                 <th>來源交易</th>
               </tr>
             </thead>
@@ -47,8 +54,9 @@ export function JournalEntryList({ refreshKey }: { refreshKey: number }) {
                     <td>{debitLine ? glName(debitLine.chartOfAccountId) : '-'}</td>
                     <td>{creditLine ? glName(creditLine.chartOfAccountId) : '-'}</td>
                     <td>{entry.amount.toLocaleString()}</td>
+                    <td>{sourceLabel(entry)}</td>
                     <td>
-                      <span className="badge">{entry.sourceCashEntryId}</span>
+                      <span className="badge">{entry.sourceReferenceId ?? entry.sourceCashEntryId ?? '-'}</span>
                     </td>
                   </tr>
                 );

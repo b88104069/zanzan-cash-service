@@ -72,6 +72,24 @@ export function ChartOfAccountsManage({ refreshKey, onChanged }: { refreshKey: n
     onChanged();
   }
 
+  async function handleToggleActive(coa: ChartOfAccount) {
+    setError(null);
+    setSuccess(null);
+    try {
+      await accounting.chartOfAccountService.setChartOfAccountActive(accounting.tenantId, coa.id, coa.status !== 'active');
+      accounting.save();
+      await refresh();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '操作失敗');
+    }
+  }
+
+  function isInactive(chartOfAccountId: string | undefined): boolean {
+    if (!chartOfAccountId) return false;
+    return chartOfAccounts.find((c) => c.id === chartOfAccountId)?.status === 'inactive';
+  }
+
   return (
     <section id="sec-coa" className="panel">
       <h3>會計科目表（Chart of Accounts）</h3>
@@ -109,6 +127,8 @@ export function ChartOfAccountsManage({ refreshKey, onChanged }: { refreshKey: n
               <th>代碼</th>
               <th>名稱</th>
               <th>類型</th>
+              <th>狀態</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -117,6 +137,12 @@ export function ChartOfAccountsManage({ refreshKey, onChanged }: { refreshKey: n
                 <td>{coa.code}</td>
                 <td>{coa.name}</td>
                 <td>{coa.type}</td>
+                <td>{coa.status === 'active' ? '啟用中' : '已停用'}</td>
+                <td>
+                  <button type="button" onClick={() => handleToggleActive(coa)}>
+                    {coa.status === 'active' ? '停用' : '啟用'}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -151,6 +177,7 @@ export function ChartOfAccountsManage({ refreshKey, onChanged }: { refreshKey: n
                         </option>
                       ))}
                     </select>
+                    {isInactive(mapping?.chartOfAccountId) && <span className="badge error-text"> 對應科目已停用</span>}
                   </td>
                 </tr>
               );
@@ -191,6 +218,7 @@ export function ChartOfAccountsManage({ refreshKey, onChanged }: { refreshKey: n
                         </option>
                       ))}
                     </select>
+                    {isInactive(mapping?.chartOfAccountId) && <span className="badge error-text"> 對應科目已停用</span>}
                   </td>
                 </tr>
               );

@@ -1,5 +1,6 @@
 import { AccountingError } from '../errors.js';
 import type { JournalEntryRepository, JournalEntryWithLines } from '../repositories/JournalEntryRepository.js';
+import type { ChartOfAccountService } from './ChartOfAccountService.js';
 import type { FiscalPeriodService } from './FiscalPeriodService.js';
 import type { CashEntryLike } from './LedgerMappingService.js';
 import { LedgerMappingService } from './LedgerMappingService.js';
@@ -10,6 +11,14 @@ export interface ProcessPendingResult {
   alreadyJournaled: number;
   unmapped: number;
   excluded: number;
+  /**
+   * Mapped-and-eligible entries skipped because at least one of their
+   * mapped ChartOfAccounts is inactive (v0.4). Checked AFTER unmapped and
+   * BEFORE periodClosed — classification order is locked by Gate Review
+   * precedent: alreadyJournaled → excluded → unmapped → inactiveAccount →
+   * periodClosed → journaled. Never silently dropped from the count.
+   */
+  inactiveAccount: number;
   /** Mapped-and-eligible entries skipped because their entryDate falls in a closed FiscalPeriod (v0.3). Never silently dropped from the count. */
   periodClosed: number;
 }
@@ -25,6 +34,7 @@ export class JournalEntryService {
     private readonly voucherService: VoucherService,
     private readonly mappingService: LedgerMappingService,
     private readonly fiscalPeriodService: FiscalPeriodService,
+    private readonly chartOfAccountService: ChartOfAccountService,
   ) {}
 
   async getJournalEntryBySource(tenantId: string, cashEntryId: string): Promise<JournalEntryWithLines | null> {
@@ -42,16 +52,21 @@ export class JournalEntryService {
     const existing = await this.journalEntries.findBySourceCashEntryId(tenantId, entry.id);
     if (existing) throw new AccountingError('CASH_ENTRY_ALREADY_JOURNALED', '這筆交易已經產生過分錄。');
 
-    if (await this.fiscalPeriodService.isDateInClosedPeriod(tenantId, entry.entryDate)) {
-      throw new AccountingError('JOURNAL_ENTRY_PERIOD_CLOSED', '此交易日期所屬的會計期間已關帳，無法新增分錄。');
-    }
-
     const classification = await this.mappingService.classify(tenantId, entry);
     if (classification.status === 'excluded') {
       throw new AccountingError('CASH_ENTRY_EXCLUDED', '轉帳分錄目前不納入 v0.1 自動記帳範圍。');
     }
     if (classification.status === 'unmapped') {
       throw new AccountingError('CASH_ENTRY_NOT_MAPPED', classification.reason ?? '尚未設定會計科目對應。');
+    }
+
+    // v0.4: an inactive mapped ChartOfAccount blocks Cash journalization too
+    // — the same shared enforcement point the Manual-voucher path uses.
+    await this.chartOfAccountService.getActiveOwnedAccount(tenantId, classification.debitChartOfAccountId!);
+    await this.chartOfAccountService.getActiveOwnedAccount(tenantId, classification.creditChartOfAccountId!);
+
+    if (await this.fiscalPeriodService.isDateInClosedPeriod(tenantId, entry.entryDate)) {
+      throw new AccountingError('JOURNAL_ENTRY_PERIOD_CLOSED', '此交易日期所屬的會計期間已關帳，無法新增分錄。');
     }
 
     return this.createJournalEntry(tenantId, entry, classification.debitChartOfAccountId!, classification.creditChartOfAccountId!);
@@ -71,6 +86,9 @@ export class JournalEntryService {
         amount,
         memo: entry.memo,
         sourceCashEntryId: entry.id,
+        sourceType: 'module',
+        sourceModule: 'CASH',
+        sourceReferenceId: entry.id,
         createdAt: new Date(),
       },
       lines: [
@@ -96,7 +114,14 @@ export class JournalEntryService {
    * period was closed afterward.
    */
   async processPending(tenantId: string, entries: Array<CashEntryLike & { entryDate: string; memo: string }>): Promise<ProcessPendingResult> {
-    const result: ProcessPendingResult = { journaled: 0, alreadyJournaled: 0, unmapped: 0, excluded: 0, periodClosed: 0 };
+    const result: ProcessPendingResult = {
+      journaled: 0,
+      alreadyJournaled: 0,
+      unmapped: 0,
+      excluded: 0,
+      inactiveAccount: 0,
+      periodClosed: 0,
+    };
 
     for (const entry of entries) {
       const existing = await this.journalEntries.findBySourceCashEntryId(tenantId, entry.id);
@@ -115,6 +140,12 @@ export class JournalEntryService {
         continue;
       }
 
+      const inactive = await this.hasInactiveAccount(tenantId, classification.debitChartOfAccountId!, classification.creditChartOfAccountId!);
+      if (inactive) {
+        result.inactiveAccount += 1;
+        continue;
+      }
+
       if (await this.fiscalPeriodService.isDateInClosedPeriod(tenantId, entry.entryDate)) {
         result.periodClosed += 1;
         continue;
@@ -129,5 +160,24 @@ export class JournalEntryService {
 
   async listJournalEntries(tenantId: string): Promise<JournalEntryWithLines[]> {
     return this.journalEntries.listByTenant(tenantId);
+  }
+
+  /**
+   * processPending's non-aborting variant of the shared inactive-COA check:
+   * unlike journalizeEntry (which lets getActiveOwnedAccount throw), a
+   * batch must count and skip an inactive-account entry rather than abort,
+   * so this probes via getActiveOwnedAccount and turns the throw into a
+   * boolean — still the same single enforcement point, never a second rule.
+   */
+  private async hasInactiveAccount(tenantId: string, debitChartOfAccountId: string, creditChartOfAccountId: string): Promise<boolean> {
+    for (const chartOfAccountId of [debitChartOfAccountId, creditChartOfAccountId]) {
+      try {
+        await this.chartOfAccountService.getActiveOwnedAccount(tenantId, chartOfAccountId);
+      } catch (err) {
+        if (err instanceof AccountingError && err.code === 'CHART_OF_ACCOUNT_INACTIVE') return true;
+        throw err;
+      }
+    }
+    return false;
   }
 }

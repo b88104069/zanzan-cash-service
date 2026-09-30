@@ -1,13 +1,16 @@
 import { BalanceSheetService } from '../../../../backend/src/domain/accounting/services/BalanceSheetService.js';
 import { ChartOfAccountService } from '../../../../backend/src/domain/accounting/services/ChartOfAccountService.js';
 import { FiscalPeriodService } from '../../../../backend/src/domain/accounting/services/FiscalPeriodService.js';
+import { GeneralVoucherService } from '../../../../backend/src/domain/accounting/services/GeneralVoucherService.js';
 import { IncomeStatementService } from '../../../../backend/src/domain/accounting/services/IncomeStatementService.js';
 import { JournalEntryService } from '../../../../backend/src/domain/accounting/services/JournalEntryService.js';
 import { LedgerMappingService } from '../../../../backend/src/domain/accounting/services/LedgerMappingService.js';
 import { TrialBalanceService } from '../../../../backend/src/domain/accounting/services/TrialBalanceService.js';
 import { VoucherService } from '../../../../backend/src/domain/accounting/services/VoucherService.js';
+import { AccountingUnitOfWork } from '../../../../backend/src/infra/memory/accounting/AccountingUnitOfWork.js';
 import { InMemoryChartOfAccountRepository } from '../../../../backend/src/infra/memory/accounting/InMemoryChartOfAccountRepository.js';
 import { InMemoryFiscalPeriodRepository } from '../../../../backend/src/infra/memory/accounting/InMemoryFiscalPeriodRepository.js';
+import { InMemoryGeneralVoucherDraftRepository } from '../../../../backend/src/infra/memory/accounting/InMemoryGeneralVoucherDraftRepository.js';
 import { InMemoryJournalEntryRepository } from '../../../../backend/src/infra/memory/accounting/InMemoryJournalEntryRepository.js';
 import { InMemoryMappingRepository } from '../../../../backend/src/infra/memory/accounting/InMemoryMappingRepository.js';
 import { InMemoryVoucherRepository } from '../../../../backend/src/infra/memory/accounting/InMemoryVoucherRepository.js';
@@ -26,6 +29,7 @@ export interface AccountingServices {
   trialBalanceService: TrialBalanceService;
   incomeStatementService: IncomeStatementService;
   balanceSheetService: BalanceSheetService;
+  generalVoucherService: GeneralVoucherService;
   save: () => void;
 }
 
@@ -44,15 +48,25 @@ export async function initAccountingServices(cash: LocalServices): Promise<Accou
   const journalEntryRepo = new InMemoryJournalEntryRepository(db);
   const voucherRepo = new InMemoryVoucherRepository(db);
   const fiscalPeriodRepo = new InMemoryFiscalPeriodRepository(db);
+  const generalVoucherDraftRepo = new InMemoryGeneralVoucherDraftRepository(db);
 
   const chartOfAccountService = new ChartOfAccountService(chartOfAccountRepo, mappingRepo);
   const mappingService = new LedgerMappingService(mappingRepo);
   const voucherService = new VoucherService(voucherRepo);
   const fiscalPeriodService = new FiscalPeriodService(fiscalPeriodRepo);
-  const journalEntryService = new JournalEntryService(journalEntryRepo, voucherService, mappingService, fiscalPeriodService);
+  const journalEntryService = new JournalEntryService(journalEntryRepo, voucherService, mappingService, fiscalPeriodService, chartOfAccountService);
   const trialBalanceService = new TrialBalanceService(journalEntryService, chartOfAccountService, fiscalPeriodService);
   const incomeStatementService = new IncomeStatementService(journalEntryService, chartOfAccountService, fiscalPeriodService);
   const balanceSheetService = new BalanceSheetService(journalEntryService, chartOfAccountService, incomeStatementService, fiscalPeriodService);
+  const unitOfWork = new AccountingUnitOfWork(db);
+  const generalVoucherService = new GeneralVoucherService(
+    generalVoucherDraftRepo,
+    journalEntryRepo,
+    voucherService,
+    chartOfAccountService,
+    fiscalPeriodService,
+    unitOfWork,
+  );
 
   const save = () => saveAccountingDatabase(db);
 
@@ -73,6 +87,7 @@ export async function initAccountingServices(cash: LocalServices): Promise<Accou
     trialBalanceService,
     incomeStatementService,
     balanceSheetService,
+    generalVoucherService,
     save,
   };
 }

@@ -20,6 +20,13 @@ export function VoucherView({ refreshKey }: { refreshKey: number }) {
     return coa ? coa.name : id;
   }
 
+  function sourceLabel(entry: JournalEntryWithLines | undefined): string {
+    if (!entry) return '-';
+    if (entry.sourceType === 'manual' && entry.sourceModule === 'GL') return '人工過帳 (GL)';
+    if (entry.sourceType === 'module' && entry.sourceModule === 'CASH') return '記帳模組 (CASH)';
+    return `${entry.sourceType} (${entry.sourceModule})`;
+  }
+
   return (
     <section id="sec-vouchers" className="panel">
       <h3>傳票（Vouchers）</h3>
@@ -37,6 +44,7 @@ export function VoucherView({ refreshKey }: { refreshKey: number }) {
                 傳票 <strong>{voucher.voucherNo}</strong>
               </div>
               <div>日期：{voucher.voucherDate}</div>
+              <div>來源：{sourceLabel(journalEntry)}</div>
               <div style={{ marginTop: 8 }}>
                 借：{debitLine ? `${glName(debitLine.chartOfAccountId)}　${debitLine.debit.toLocaleString()}` : '-'}
               </div>

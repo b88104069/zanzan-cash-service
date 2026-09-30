@@ -49,7 +49,10 @@ export function AccountingDashboard({ refreshKey, onProcessed }: { refreshKey: n
     const result = await accounting.journalEntryService.processPending(accounting.tenantId, entries);
     accounting.save();
     const periodClosedNote = result.periodClosed > 0 ? `、期間已關帳，略過 ${result.periodClosed} 筆` : '';
-    setMessage(`已產生 ${result.journaled} 筆分錄（已略過：已存在 ${result.alreadyJournaled} 筆、待設定科目對應 ${result.unmapped} 筆、未處理轉帳 ${result.excluded} 筆${periodClosedNote}）`);
+    const inactiveAccountNote = result.inactiveAccount > 0 ? `、對應科目已停用，略過 ${result.inactiveAccount} 筆` : '';
+    setMessage(
+      `已產生 ${result.journaled} 筆分錄（已略過：已存在 ${result.alreadyJournaled} 筆、待設定科目對應 ${result.unmapped} 筆、未處理轉帳 ${result.excluded} 筆${inactiveAccountNote}${periodClosedNote}）`,
+    );
     onProcessed();
   }
 

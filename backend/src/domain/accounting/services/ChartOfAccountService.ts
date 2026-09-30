@@ -46,4 +46,27 @@ export class ChartOfAccountService {
   async listCategoryMappings(tenantId: string): Promise<CategoryMapping[]> {
     return this.mappings.listCategoryMappings(tenantId);
   }
+
+  /**
+   * The SINGLE shared enforcement point for "an inactive ChartOfAccount
+   * cannot receive new postings" (v0.4). Used by BOTH the Cash-mapping
+   * posting path (JournalEntryService.journalizeEntry/processPending) and
+   * the Manual-voucher posting path (GeneralVoucherService.postDraft) — no
+   * other code should duplicate this check.
+   */
+  async getActiveOwnedAccount(tenantId: string, chartOfAccountId: string): Promise<ChartOfAccount> {
+    const account = await this.chartOfAccounts.findById(tenantId, chartOfAccountId);
+    if (!account) throw new AccountingError('CHART_OF_ACCOUNT_NOT_FOUND', '找不到這個會計科目。');
+    if (account.status !== 'active') {
+      throw new AccountingError('CHART_OF_ACCOUNT_INACTIVE', '此會計科目已停用，無法用於新增分錄。');
+    }
+    return account;
+  }
+
+  /** Activates/deactivates a ChartOfAccount. Deactivating does not touch any existing JournalEntry/JournalLine — it only blocks NEW postings via getActiveOwnedAccount above. */
+  async setChartOfAccountActive(tenantId: string, id: string, active: boolean): Promise<ChartOfAccount> {
+    const account = await this.chartOfAccounts.findById(tenantId, id);
+    if (!account) throw new AccountingError('CHART_OF_ACCOUNT_NOT_FOUND', '找不到這個會計科目。');
+    return this.chartOfAccounts.update({ ...account, status: active ? 'active' : 'inactive' });
+  }
 }

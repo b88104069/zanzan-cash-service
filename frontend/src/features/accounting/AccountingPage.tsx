@@ -3,6 +3,7 @@ import { AccountingDataProvider } from '../../localdb/accounting/AccountingDataP
 import { AccountingDashboard } from './AccountingDashboard.js';
 import { ChartOfAccountsManage } from './ChartOfAccountsManage.js';
 import { FiscalPeriodsView } from './FiscalPeriodsView.js';
+import { GeneralVoucherView } from './GeneralVoucherView.js';
 import { JournalEntryList } from './JournalEntryList.js';
 import { VoucherView } from './VoucherView.js';
 import { TrialBalanceView } from './TrialBalanceView.js';
@@ -13,6 +14,7 @@ const NAV_ITEMS = [
   { href: '#sec-accounting-dashboard', label: '儀表板' },
   { href: '#sec-coa', label: '會計科目 / 對應' },
   { href: '#sec-fiscal-periods', label: '會計期間' },
+  { href: '#sec-general-voucher', label: '手動分錄 / 傳票' },
   { href: '#sec-journal-entries', label: '分錄' },
   { href: '#sec-vouchers', label: '傳票' },
   { href: '#sec-trial-balance', label: '試算表' },
@@ -38,7 +40,7 @@ export function AccountingPage() {
   return (
     <AccountingDataProvider>
       <div className="wrap">
-        <h2>贊贊 ERP — 會計模組（Prototype v0.3）</h2>
+        <h2>贊贊 ERP — 會計模組（Prototype v0.4）</h2>
         <nav className="top-nav">
           {NAV_ITEMS.map((item) => (
             <a key={item.href} href={item.href}>
@@ -49,6 +51,7 @@ export function AccountingPage() {
         <AccountingDashboard refreshKey={refreshKey} onProcessed={bump} />
         <ChartOfAccountsManage refreshKey={refreshKey} onChanged={bump} />
         <FiscalPeriodsView refreshKey={refreshKey} onChanged={bump} />
+        <GeneralVoucherView refreshKey={refreshKey} onChanged={bump} />
         <JournalEntryList refreshKey={refreshKey} />
         <VoucherView refreshKey={refreshKey} />
         <TrialBalanceView refreshKey={refreshKey} />

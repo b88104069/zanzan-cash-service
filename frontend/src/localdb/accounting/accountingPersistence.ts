@@ -1,5 +1,6 @@
 import { AccountingDatabase, generateAccountingId } from '../../../../backend/src/infra/memory/accounting/AccountingDatabase.js';
-import type { AccountMapping, CategoryMapping, ChartOfAccount, FiscalPeriod, JournalEntry, JournalLine, Voucher } from '../../../../backend/src/domain/accounting/types.js';
+import type { AccountMapping, CategoryMapping, ChartOfAccount, FiscalPeriod, GeneralVoucherDraft, JournalEntry, JournalLine, Voucher } from '../../../../backend/src/domain/accounting/types.js';
+import { migrateJournalEntryProvenance } from './journalProvenanceMigration.js';
 
 // Mirrors frontend/src/localdb/persistence.ts's approach for the Cash
 // Module: reuse the Accounting Module's own backend classes as-is, add a
@@ -17,6 +18,7 @@ interface SerializedAccountingDb {
   journalLines: JournalLine[];
   vouchers: Voucher[];
   fiscalPeriods: FiscalPeriod[];
+  generalVoucherDrafts: GeneralVoucherDraft[];
 }
 
 function reviveDates<T extends { createdAt: Date | string }>(row: T): T {
@@ -25,6 +27,10 @@ function reviveDates<T extends { createdAt: Date | string }>(row: T): T {
 
 function reviveFiscalPeriod(row: FiscalPeriod): FiscalPeriod {
   return { ...row, createdAt: new Date(row.createdAt), closedAt: row.closedAt ? new Date(row.closedAt) : undefined };
+}
+
+function reviveGeneralVoucherDraft(row: GeneralVoucherDraft): GeneralVoucherDraft {
+  return { ...row, createdAt: new Date(row.createdAt), updatedAt: new Date(row.updatedAt) };
 }
 
 function loadFromStorage(): SerializedAccountingDb | null {
@@ -48,6 +54,7 @@ function warmUpIdCounter(db: AccountingDatabase): void {
     ...db.journalLines.keys(),
     ...db.vouchers.keys(),
     ...db.fiscalPeriods.keys(),
+    ...db.generalVoucherDrafts.keys(),
   ];
   for (const id of allIds) {
     const match = /_(\d+)$/.exec(id);
@@ -64,10 +71,17 @@ export function loadAccountingDatabase(): AccountingDatabase {
     for (const row of saved.chartOfAccounts) db.chartOfAccounts.set(row.id, reviveDates(row));
     for (const row of saved.accountMappings) db.accountMappings.set(row.id, reviveDates(row));
     for (const row of saved.categoryMappings) db.categoryMappings.set(row.id, reviveDates(row));
-    for (const row of saved.journalEntries) db.journalEntries.set(row.id, reviveDates(row));
+    // v0.4: migrate provenance BEFORE any service code runs on this data —
+    // a throw here propagates before anything is written back, so a
+    // corrupt/unrecognized row never gets silently replaced.
+    for (const row of saved.journalEntries) {
+      const migrated = migrateJournalEntryProvenance(reviveDates(row));
+      db.journalEntries.set(migrated.id, migrated);
+    }
     for (const row of saved.journalLines) db.journalLines.set(row.id, row);
     for (const row of saved.vouchers) db.vouchers.set(row.id, reviveDates(row));
     for (const row of saved.fiscalPeriods ?? []) db.fiscalPeriods.set(row.id, reviveFiscalPeriod(row));
+    for (const row of saved.generalVoucherDrafts ?? []) db.generalVoucherDrafts.set(row.id, reviveGeneralVoucherDraft(row));
   }
 
   warmUpIdCounter(db);
@@ -83,6 +97,7 @@ export function saveAccountingDatabase(db: AccountingDatabase): void {
     journalLines: [...db.journalLines.values()],
     vouchers: [...db.vouchers.values()],
     fiscalPeriods: [...db.fiscalPeriods.values()],
+    generalVoucherDrafts: [...db.generalVoucherDrafts.values()],
   };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));

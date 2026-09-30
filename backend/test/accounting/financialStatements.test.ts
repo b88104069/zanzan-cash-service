@@ -112,7 +112,7 @@ describe('Accounting Module v0.2 — TrialBalanceService', () => {
     // something the normal Cash-mapping flow can produce, but a real
     // scenario a general ledger must be able to represent.
     await h.journalEntryRepo.create({
-      entry: { tenantId: 't1', entryDate: '2026-01-10', amount: 500, memo: 'abnormal liability test', sourceCashEntryId: 'synthetic', createdAt: new Date() },
+      entry: { tenantId: 't1', entryDate: '2026-01-10', amount: 500, memo: 'abnormal liability test', sourceCashEntryId: 'synthetic', sourceType: 'system', sourceModule: 'SYSTEM', sourceReferenceId: 'synthetic', createdAt: new Date() },
       lines: [
         { chartOfAccountId: h.liabilityGl.id, debit: 500, credit: 0 },
         { chartOfAccountId: h.cashGl.id, debit: 0, credit: 500 },
@@ -165,7 +165,7 @@ describe('Accounting Module v0.2 — BalanceSheetService', () => {
     const h = await setupTenant();
     await journalizeIncome(h, '2026-01-05', 30000, '學費');
     await h.journalEntryRepo.create({
-      entry: { tenantId: 't1', entryDate: '2026-01-10', amount: 500, memo: 'abnormal liability test', sourceCashEntryId: 'synthetic', createdAt: new Date() },
+      entry: { tenantId: 't1', entryDate: '2026-01-10', amount: 500, memo: 'abnormal liability test', sourceCashEntryId: 'synthetic', sourceType: 'system', sourceModule: 'SYSTEM', sourceReferenceId: 'synthetic', createdAt: new Date() },
       lines: [
         { chartOfAccountId: h.liabilityGl.id, debit: 500, credit: 0 },
         { chartOfAccountId: h.cashGl.id, debit: 0, credit: 500 },

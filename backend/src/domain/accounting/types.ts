@@ -78,11 +78,23 @@ export interface JournalLine {
 export interface JournalEntry {
   id: string;
   tenantId: string;
-  entryDate: string; // ISO date, copied from the source CashEntry at journaling time
+  entryDate: string; // ISO date, copied from the source CashEntry at journaling time (or from the GeneralVoucherDraft, v0.4)
   amount: number;
   memo: string;
-  /** Traceability back to the Cash Module — reference only, never written back to. */
-  sourceCashEntryId: string;
+  /**
+   * Traceability back to the Cash Module — reference only, never written
+   * back to. Optional as of v0.4: only Cash-derived JournalEntries set
+   * this; manual-voucher-derived entries never do. Kept for backward
+   * compatibility with pre-v0.4 persisted data — see
+   * `sourceType`/`sourceModule`/`sourceReferenceId` below for the general
+   * provenance model that superseded it.
+   */
+  sourceCashEntryId?: string;
+  /** See "Journal provenance model" (v0.4) below — required for every JournalEntry created from v0.4 onward. */
+  sourceType: JournalEntrySourceType;
+  sourceModule: JournalEntrySourceModule;
+  /** The id of whatever produced this entry within sourceModule — a CashEntry id for CASH, a GeneralVoucherDraft id for manual/GL. */
+  sourceReferenceId?: string;
   createdAt: Date;
 }
 
@@ -215,6 +227,54 @@ export interface BalanceSheetReport {
 //     FiscalPeriod (fiscalPeriodId) instead of explicit dates, but the
 //     resolution is a single source of truth (see TrialBalance/
 //     IncomeStatement/BalanceSheetService) — never a second calculation.
+
+// --- Accounting Module v0.4 — Manual Journal Entry + General Voucher ---
+//
+// See docs/architecture/accounting-module-v0.4.md for the full design and
+// the Gate Review thread that approved this plan (3 rounds, final PASS)
+// before any code was written.
+//
+// Core rule: `JournalEntry` permanently means "already posted to GL". A
+// draft manual voucher is a SEPARATE entity, `GeneralVoucherDraft`, never
+// itself a `JournalEntry` — it never affects Trial Balance / Income
+// Statement / Balance Sheet while unposted. Posting a draft writes into the
+// SAME JournalEntry/JournalLine/Voucher tables Cash-derived entries use —
+// there is only ever one GL, never a second ledger for manual postings.
+
+/** Every JournalEntry now carries where it came from. 'manual' = a human posted a General Voucher directly; 'module' = produced by another module's own posting logic; 'system' = reserved for future system-generated entries (e.g. closing entries) — not produced anywhere in v0.4. */
+export type JournalEntrySourceType = 'manual' | 'module' | 'system';
+
+/** Which module produced the entry. Only 'GL' (manual voucher) and 'CASH' (Cash Module mapping) are actually produced in v0.4 — AP/AR/FA/PAYROLL/INVENTORY/SYSTEM are declared now as future extension points so the provenance model doesn't need another breaking change when those modules arrive. */
+export type JournalEntrySourceModule = 'GL' | 'CASH' | 'AP' | 'AR' | 'FA' | 'PAYROLL' | 'INVENTORY' | 'SYSTEM';
+
+export type GeneralVoucherDraftStatus = 'draft' | 'posted';
+
+/** One line of a General Voucher draft. Freely addable/removable/editable while the draft is 'draft'; frozen once posted (the resulting JournalLine is the permanent record from then on). */
+export interface GeneralVoucherDraftLine {
+  id: string;
+  chartOfAccountId: string;
+  debit: number; // >= 0
+  credit: number; // >= 0
+}
+
+/**
+ * A manually-entered journal voucher before it is posted to the GL. Lines
+ * may be incomplete or unbalanced while status === 'draft' — full
+ * validation happens only at `GeneralVoucherService.postDraft` time. Once
+ * posted, a draft is immutable (no update/delete) and permanently linked to
+ * the JournalEntry it produced via `postedJournalEntryId`.
+ */
+export interface GeneralVoucherDraft {
+  id: string;
+  tenantId: string;
+  entryDate: string; // ISO date
+  memo: string;
+  lines: GeneralVoucherDraftLine[];
+  status: GeneralVoucherDraftStatus;
+  postedJournalEntryId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 export type FiscalPeriodStatus = 'open' | 'closed';
 
