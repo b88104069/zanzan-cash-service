@@ -81,10 +81,21 @@ interface GeneralVoucherDraft {
   lines: GeneralVoucherDraftLine[];
   status: GeneralVoucherDraftStatus;
   postedJournalEntryId?: string;
+  postedVoucherId?: string;
+  postedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
 ```
+
+> **Naming note (added after Gate Review):** `entryDate` was called
+> `voucherDate` in the originally-approved plan text. It was implemented as
+> `entryDate` instead because it is genuinely the JournalEntry's posting
+> date — fiscal-period-lock checks and the financial statements already
+> operate on `entryDate` semantics elsewhere in this module — and Gate
+> Review accepted this as a documented naming deviation, not a behavior
+> change. On `GeneralVoucherDraft`, `entryDate` means: the manual voucher
+> posting / journal entry date.
 
 - **Create / update**: no strict validation. Lines may be incomplete,
   unbalanced, or reference nothing yet — a draft is a scratchpad, not a
@@ -109,7 +120,11 @@ interface GeneralVoucherDraft {
 
   Any failure at any step creates zero artifacts. A successful post
   atomically creates exactly one `JournalEntry` + its `JournalLine`s + one
-  `Voucher`, and marks the draft `posted` with `postedJournalEntryId` set.
+  `Voucher`, and marks the draft `posted` with `postedJournalEntryId`,
+  `postedVoucherId`, and `postedAt` all set (all three mutated together,
+  inside the same `AccountingUnitOfWork.runAtomic()` transaction as the
+  JournalEntry/JournalLine/Voucher creation — a late failure rolls all of it
+  back together).
 
 ## The single shared inactive-COA enforcement point
 

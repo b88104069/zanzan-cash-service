@@ -273,6 +273,10 @@ describe('Accounting Module v0.4 — successful post', () => {
     const postedDraft = await h.generalVoucherService.getDraft('t1', draft.id);
     expect(postedDraft.status).toBe('posted');
     expect(postedDraft.postedJournalEntryId).toBe(journalEntry.id);
+    const [createdVoucher] = await h.voucherService.listVouchers('t1');
+    expect(postedDraft.postedVoucherId).toBe(createdVoucher!.id);
+    expect(postedDraft.postedAt).toBeInstanceOf(Date);
+    expect(postedDraft.postedAt).toBeTruthy();
   });
 
   it('a posted manual JournalEntry flows into Trial Balance / Income Statement / Balance Sheet; a draft never affects any report while unposted', async () => {
@@ -331,6 +335,8 @@ describe('Accounting Module v0.4 — UnitOfWork atomicity', () => {
     const stillDraft = await h.generalVoucherService.getDraft('t1', draft.id);
     expect(stillDraft.status).toBe('draft');
     expect(stillDraft.postedJournalEntryId).toBeUndefined();
+    expect(stillDraft.postedVoucherId).toBeUndefined();
+    expect(stillDraft.postedAt).toBeUndefined();
   });
 
   it('an early failure point (e.g. inactive COA, before any mutation) also leaves zero artifacts — for contrast with the late-failure case above', async () => {

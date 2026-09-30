@@ -148,9 +148,16 @@ export class GeneralVoucherService {
         lines: draft.lines.map((line) => ({ chartOfAccountId: line.chartOfAccountId, debit: line.debit, credit: line.credit })),
       });
 
-      await this.voucherService.createForJournalEntry(tenantId, journalEntry.id, draft.entryDate);
+      const voucher = await this.voucherService.createForJournalEntry(tenantId, journalEntry.id, draft.entryDate);
 
-      await this.drafts.update({ ...draft, status: 'posted', postedJournalEntryId: journalEntry.id, updatedAt: new Date() });
+      await this.drafts.update({
+        ...draft,
+        status: 'posted',
+        postedJournalEntryId: journalEntry.id,
+        postedVoucherId: voucher.id,
+        postedAt: new Date(),
+        updatedAt: new Date(),
+      });
 
       return journalEntry;
     });

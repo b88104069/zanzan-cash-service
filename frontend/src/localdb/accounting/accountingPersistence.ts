@@ -30,7 +30,12 @@ function reviveFiscalPeriod(row: FiscalPeriod): FiscalPeriod {
 }
 
 function reviveGeneralVoucherDraft(row: GeneralVoucherDraft): GeneralVoucherDraft {
-  return { ...row, createdAt: new Date(row.createdAt), updatedAt: new Date(row.updatedAt) };
+  return {
+    ...row,
+    createdAt: new Date(row.createdAt),
+    updatedAt: new Date(row.updatedAt),
+    postedAt: row.postedAt ? new Date(row.postedAt) : undefined,
+  };
 }
 
 function loadFromStorage(): SerializedAccountingDb | null {

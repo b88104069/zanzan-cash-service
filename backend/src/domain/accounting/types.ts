@@ -272,6 +272,10 @@ export interface GeneralVoucherDraft {
   lines: GeneralVoucherDraftLine[];
   status: GeneralVoucherDraftStatus;
   postedJournalEntryId?: string;
+  /** Set together with postedJournalEntryId/postedAt at post time — the id of the Voucher created for postedJournalEntryId. Never set independently of the other two. */
+  postedVoucherId?: string;
+  /** Set together with postedJournalEntryId/postedVoucherId at post time — when this draft was posted. Never set independently of the other two. */
+  postedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
