@@ -473,3 +473,59 @@ statement services and the real `loadAccountingDatabase()`/
 `saveAccountingDatabase()` code path, that Trial Balance, Income Statement,
 and Balance Sheet results are unchanged by the v0.3→v0.4 schema migration
 and by a save/reload round trip.
+
+GATE REVIEW RESULT
+- **STATUS: PASS** — Slack `#ai-gate-test`, message ts `1790759972.647919`,
+  sender verified as the ChatGPT Slack app.
+- **MUST FIX: NONE.**
+- Verified: the statement-invariance proof added in FIX DELTA 2 landed
+  correctly — Trial Balance/Income Statement/Balance Sheet recomputed via
+  the real `loadAccountingDatabase()`/`saveAccountingDatabase()` code path
+  against a v0.3-shaped legacy payload, asserted both before and after a
+  save+reload round trip: Trial Balance `totalPeriodDebit`=1000/
+  `totalPeriodCredit`=1000 with asset (庫存現金) ending balance 1000 and
+  revenue (課程收入科目) ending balance 1000; Income Statement `totalRevenue`
+  =1000/`totalExpense`=0/`netIncome`=1000; Balance Sheet `totalAssets`=1000/
+  `currentEarnings`=1000/`totalLiabilitiesAndEquity`=1000 — every figure
+  identical before and after the round trip, using the real statement
+  services rather than hard-coded duplication. The attribution correction
+  in FIX DELTA 2 (removing the false claim of a reviewer-granted allowance
+  to skip statement-service wiring) was accepted as accurate, with the
+  audit trail preserved rather than rewritten out of the report. All MUST
+  FIX items from all three review rounds remain resolved: the posted-draft
+  metadata contract (`postedJournalEntryId`/`postedVoucherId`/`postedAt`
+  set atomically together, verified both on successful post and on
+  rollback of a late-injected `AccountingUnitOfWork` failure); the atomic
+  `runAtomic()` UnitOfWork covering JournalEntry/JournalLine/Voucher/draft-
+  status together, including the late-failure rollback case; and the real
+  persistence-boundary migration test (`accountingPersistence.test.ts`,
+  backed by jsdom's real `localStorage`, not a stub). v0.4's core
+  architecture is confirmed intact: draft ≠ `JournalEntry` (a draft affects
+  no statement while unposted); manual voucher posting and Cash-derived
+  posting share the one GL, never a second ledger path; the journal
+  provenance contract (`sourceType`×`sourceModule`×optional
+  `sourceReferenceId`) is formalized and additive; the inactive-COA
+  invariant is enforced GL-wide through the single shared
+  `getActiveOwnedAccount()` check on both the Cash and Manual posting
+  paths; manual voucher lines are validated for tenant-scoped account
+  existence/ownership/active status at Post time; posting into a closed
+  fiscal period is blocked via v0.3's lock, reused rather than
+  reimplemented; a posted manual journal entry remains immutable until
+  v0.6's planned reversal/adjustment workflow. Regression evidence: backend
+  109/109 tests passing (17 files); frontend `tsc -b`/`vite build` clean;
+  frontend `vitest run` 2/2; `npx playwright test` 5/5 with no regressions;
+  Cash Module confirmed untouched by `git show --stat`; `feature/
+  accounting-module` still unmerged.
+- Non-blocking note for future reference (does not affect this PASS):
+  v0.5 (Closing Entries + Retained Earnings) should reuse this round's
+  provenance/atomic-posting foundation — closing entries posted with
+  `sourceType='system'`/`sourceModule='SYSTEM'` through the same
+  `AccountingUnitOfWork`/GL path — rather than building a second, parallel
+  ledger path for the closing process. This is out of scope for v0.4 and
+  is recorded here only as guidance for whoever scopes v0.5.
+- **`feature/accounting-module` remains unmerged.** This PASS is the v0.4
+  implementation Gate only; it does not itself authorize a merge to `main`.
+  Per the standing Option B decision, the next step (deployment validation,
+  v0.5, or a merge decision) is for the project owner to decide.
+
+**VERDICT: Accounting Module v0.4 Manual Journal Entry + General Voucher — implementation PASS.**
