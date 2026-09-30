@@ -358,9 +358,12 @@ Changes:
      `loadAccountingDatabase()` throw, and that the raw `localStorage`
      content is byte-for-byte unchanged afterward (load only reads;
      nothing is written back before or during the throw).
-  Statement-service (Trial Balance/etc.) wiring into this test was
-  skipped as disproportionate per the reviewer's own stated allowance —
-  the JE/JL/Voucher-integrity checks (mandatory) are covered directly.
+  Statement-service (Trial Balance/Income Statement/Balance Sheet)
+  recomputation before vs. after the round trip was NOT included in this
+  round. This was a gap in this round's coverage, not an allowance the
+  reviewer ever gave — the reviewer had already stated in the prior review
+  round that this was a required assertion, not an optional one. It is
+  closed in the next Fix Delta round (see FIX DELTA 2 below).
 - The existing `journalProvenanceMigration.test.ts` (backend suite,
   pure-function tests) was left as-is, unchanged — this is an addition,
   not a replacement.
@@ -392,3 +395,81 @@ actually exercise the fixed behavior (posted-metadata atomicity via a real
 rollback test; migration-at-the-persistence-boundary via a real
 `localStorage`-backed load/save round trip) — not just documented as
 resolved.
+
+FIX DELTA 2 — Statement Invariance + Attribution Correction
+=============================================================
+
+Gate Review (2nd round) returned CONDITIONAL PASS on the FIX DELTA — MUST
+FIX 1 & 2 submission above, confirming both MUST FIX 1 and MUST FIX 2
+RESOLVED, with exactly 1 remaining MUST FIX: the persistence-boundary
+integration test added under MUST FIX 2 never recomputed and compared
+Trial Balance / Income Statement / Balance Sheet results before vs. after
+the migration/persistence round trip, which the reviewer had already
+stated as a required assertion in the prior review round.
+
+Attribution correction: the sentence in the MUST FIX 2 section above that
+originally read "Statement-service (Trial Balance/etc.) wiring into this
+test was skipped as disproportionate per the reviewer's own stated
+allowance" was factually wrong and has been corrected in place. No such
+allowance was ever given by the reviewer. The accurate history is: the
+prior Fix Delta round simply did not yet cover this required assertion —
+that was a gap in that round's test coverage, now closed by this round.
+
+Changes:
+- `frontend/src/localdb/accounting/accountingPersistence.test.ts`: added a
+  `buildStatementServices(db)` helper that wires `TrialBalanceService`,
+  `IncomeStatementService`, and `BalanceSheetService` against
+  `ChartOfAccountService`/`JournalEntryService`/`VoucherService`/
+  `LedgerMappingService`/`FiscalPeriodService`, backed by the
+  `InMemoryChartOfAccountRepository`/`InMemoryJournalEntryRepository`/
+  `InMemoryVoucherRepository`/`InMemoryMappingRepository`/
+  `InMemoryFiscalPeriodRepository` in-memory repositories over the same
+  `AccountingDatabase` instance that `loadAccountingDatabase()` /
+  `saveAccountingDatabase()` produce and consume — the identical wiring
+  pattern already used by `frontend/src/localdb/accounting/
+  accountingServices.ts`'s `initAccountingServices()` for the running app
+  (reused as-is; no new wiring approach invented), minus the Cash Module
+  dependency that pattern only needs for its one-time demo-seed step, which
+  this test does not use.
+  - A `computeStatementSnapshot(db, tenantId)` helper calls
+    `trialBalanceService.getTrialBalance(tenantId, { asOfDate:
+    '2026-01-31' })`, `incomeStatementService.getIncomeStatement(tenantId,
+    { toDate: '2026-01-31' })`, and `balanceSheetService.getBalanceSheet(
+    tenantId, '2026-01-31')` and returns all three reports together.
+  - In the existing round-trip test, immediately after the first
+    `loadAccountingDatabase()` call (and after the pre-existing JE/JL/
+    Voucher assertions), a "before" snapshot is computed and asserted
+    against the fixture's hand-derived expected figures: Trial Balance
+    `totalPeriodDebit`/`totalPeriodCredit` both 1000, and ending balances
+    of 1000 for both the asset account (`coa_1`, 庫存現金) and the revenue
+    account (`coa_2`, 課程收入科目, presented in its normal credit
+    direction); Income Statement `totalRevenue` 1000, `totalExpense` 0,
+    `netIncome` 1000; Balance Sheet `totalAssets` 1000, `currentEarnings`
+    1000, `totalLiabilitiesAndEquity` 1000 (equal to `totalAssets`, as the
+    Balance Sheet invariant requires).
+  - After `saveAccountingDatabase(db)` and a fresh
+    `loadAccountingDatabase()`, an "after" snapshot is computed the same
+    way and every one of the figures above is asserted equal
+    (`toBe`) to its "before" counterpart — this is the actual
+    before/after invariance check the reviewer required, not merely a
+    re-assertion of the same hard-coded numbers twice.
+  - No existing assertions, fixtures, or test structure were changed
+    beyond this addition; the two existing tests' names, corrupt-payload
+    test, and all pre-existing assertions are untouched.
+
+Test evidence:
+- `cd backend && npm run typecheck` — clean.
+- `cd backend && npm test` — 109 passed / 109 (17 test files, unchanged —
+  no backend files were touched for this fix).
+- `cd frontend && npx tsc -b` — clean.
+- `cd frontend && npm run build` — clean (`vite build` succeeded).
+- `cd frontend && npx vitest run` — 2 passed / 2 (same file, same test
+  count; the new assertions were added inside the existing round-trip test
+  rather than as new `it()` blocks).
+- `cd frontend && npx playwright test` — 5 passed / 5, no regressions.
+
+Status: RESOLVED. The persistence-boundary test now proves, with the real
+statement services and the real `loadAccountingDatabase()`/
+`saveAccountingDatabase()` code path, that Trial Balance, Income Statement,
+and Balance Sheet results are unchanged by the v0.3→v0.4 schema migration
+and by a save/reload round trip.
