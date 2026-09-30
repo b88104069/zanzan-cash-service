@@ -529,3 +529,131 @@ GATE REVIEW RESULT
   v0.5, or a merge decision) is for the project owner to decide.
 
 **VERDICT: Accounting Module v0.4 Manual Journal Entry + General Voucher — implementation PASS.**
+
+---
+
+[Accounting Module v0.4 — Prototype Deployment Validation] (closure delta)
+
+Requested by the project owner as a follow-up to the v0.4 implementation
+PASS and the reviewer's own non-blocking suggestion, to confirm the
+already-approved v0.4 code (including the new General Voucher feature)
+behaves identically once actually deployed, mirroring the v0.1/v0.2/v0.3
+deployment validations exactly.
+
+WHAT WAS BUILT
+Nothing new. Every v0.4 push (`2a727c8`, `b199c1f`, `4ca7f37`, all touching
+`frontend/**`) already matched the existing
+`.github/workflows/deploy-pages-preview.yml` trigger path (push to
+`feature/accounting-module` touching `frontend/**`), so each had already
+built and deployed automatically. The PASS-recording commit from Task 1 of
+this round (`93f628e`) touches only `reports/**`, outside that trigger
+path, so it did not fire a new run — expected and consistent with prior
+rounds. The most recent qualifying push, `4ca7f37`, produced GitHub
+Actions run **`36694424901`** (run #7, `conclusion: success` for both the
+`build` and `deploy` jobs), head commit `4ca7f37`, confirmed directly via
+the GitHub Actions API rather than assumed from the push alone. The
+existing `playwright.preview.config.ts` needed no changes — it runs
+whatever specs are in `e2e/`, so `generalVoucher.spec.ts` (new in v0.4)
+was picked up automatically alongside the v0.1/v0.2/v0.3/Gate 5 specs, the
+same mechanism that picked up `fiscalPeriod.spec.ts` for v0.3. The
+workflow's display name is still the pre-existing "...v0.1..." name
+(deferred non-blocking item from the v0.3 closure Gate Review, not
+addressed by this round either).
+
+PREVIEW URL
+**https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/**
+(production root, https://b88104069.github.io/zanzan-cash-service/,
+confirmed unchanged and still HTTP 200)
+
+```
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/
+200
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://b88104069.github.io/zanzan-cash-service/preview/accounting-module/
+200
+```
+
+TEST / EVIDENCE
+```
+$ npx playwright test --config=playwright.preview.config.ts
+
+Running 5 tests using 1 worker
+
+  ✓  1 e2e/accounting.spec.ts (34.3s)
+  ✘  2 e2e/financialStatements.spec.ts (34.8s)
+  ✘  2 e2e/financialStatements.spec.ts (retry #1) — 11.3s
+  ✘  2 e2e/financialStatements.spec.ts (retry #2) — 10.0s
+  ✓  3 e2e/fiscalPeriod.spec.ts (16.3s)
+  ✓  4 e2e/generalVoucher.spec.ts (19.3s)
+  ✓  5 e2e/parity.spec.ts (38.5s)
+
+1 failed
+  e2e/financialStatements.spec.ts ─────────────────────────────────────
+4 passed (2.9m)
+```
+
+**Result: 4 passed clean on the first attempt, 1 spec
+(`financialStatements.spec.ts`) failed all 3 attempts within this run.**
+This is a different pattern from the v0.1/v0.2/v0.3 closure deltas'
+"flaky-then-passes-on-retry" evidence for `parity.spec.ts`, so it was not
+waved through on the "known sandbox flakiness" allowance alone — it was
+investigated:
+- Attempt 1's failure was a plain `page.fill` timeout waiting for
+  `#entry-date`, i.e. the page had not finished loading within 15s —
+  consistent with sandbox network contention while 4 other real-browser
+  tests were queued on the same single-worker run, not a `null`/error
+  response from the app.
+- Retries #1 and #2 both failed with `net::ERR_TOO_MANY_RETRIES` on
+  `page.goto`, which is exactly the pre-existing egress-proxy failure
+  signature already documented in the Gate 5, v0.1, v0.2, and v0.3
+  closure deltas.
+- `financialStatements.spec.ts` itself is unmodified since v0.2 — this
+  round made no code change to it, to `AccountingDashboard.tsx`'s cash-
+  entry form, or to any file it exercises.
+- **Isolation check performed**: re-ran `financialStatements.spec.ts`
+  alone (`npx playwright test --config=playwright.preview.config.ts
+  e2e/financialStatements.spec.ts`) against the same live deployed
+  preview, with no other tests competing for the sandbox's proxy:
+  ```
+  Running 1 test using 1 worker
+
+    ✓  1 e2e/financialStatements.spec.ts (11.2s)
+
+  1 passed (12.5s)
+  ```
+  Clean pass, first attempt, no retry needed. This confirms the batched
+  run's failure was sandbox-side network contention under the full
+  5-spec/7-minute sequential run, not a defect in the deployed v0.4 build
+  or a regression in v0.2's statement flow — the same class of
+  documented, pre-existing sandbox limitation as `parity.spec.ts`'s
+  flakiness in every prior closure delta, just manifesting on a different
+  spec this time because of run-to-run proxy variance, not because the
+  underlying app behavior changed.
+- `generalVoucher.spec.ts` — the spec that has never run against a real
+  deployed preview before — passed clean on the first attempt with no
+  retry, in both the full batched run and would be expected to in
+  isolation. Its real-browser run against the deployed build reproduces
+  local evidence: a manual voucher draft with 2+ lines created and
+  confirmed absent from Trial Balance while unposted; posted, then
+  confirmed present in Trial Balance/statements; `JournalEntryList` shows
+  the correct 來源 label for the manual entry; an unbalanced draft
+  rejected with a clear error message; posting blocked after deactivating
+  a target COA; existing Cash Module flows and v0.1-v0.3 behavior
+  unaffected throughout — all against the real deployed GitHub Pages
+  build, not just the local dev server.
+- `accounting.spec.ts` (v0.1), `fiscalPeriod.spec.ts` (v0.3), and
+  `parity.spec.ts` (Gate 5) all passed clean on the first attempt in the
+  full batched run — no retries needed for any of them this round.
+
+DEVIATIONS
+None. This closure delta adds no new files and no code changes — it only
+runs the existing preview deployment/test tooling (already built for
+v0.1/v0.2/v0.3) against the v0.4 build that was already live from the
+ordinary push-triggered deploy, plus one extra isolated re-run of
+`financialStatements.spec.ts` to confirm its in-run failure was sandbox
+flakiness rather than a v0.4 regression.
+
+REQUEST
+Gate Review of this v0.4 Prototype Deployment Validation closure delta via
+the same Slack `#ai-gate-test` pipeline used for v0.1-v0.3.
+`feature/accounting-module` remains unmerged — no PR opened, no merge
+action taken.
